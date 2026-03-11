@@ -47,9 +47,9 @@ echo Build successful (CMake)!
 REM Copy to bin folder if needed
 if not exist ..\bin mkdir ..\bin
 copy /Y *.dll ..\bin\
-echo Plugin location: %PROJECT_ROOT%\bin\TrafficMonitorBatteryPlugin.dll
+echo Plugin location: %PROJECT_ROOT%\bin\BatteryPlugin.dll
 echo.
-echo IMPORTANT: Rename libTrafficMonitorBatteryPlugin.dll to TrafficMonitorBatteryPlugin.dll if needed.
+echo IMPORTANT: Rename libBatteryPlugin.dll to BatteryPlugin.dll if needed.
 pause
 popd
 exit /b 0
@@ -58,7 +58,7 @@ exit /b 0
 echo.
 echo Attempting direct compilation with g++...
 if not exist bin mkdir bin
-g++ -shared -o bin/TrafficMonitorBatteryPlugin.dll src/BatteryPlugin.cpp src/dllmain.cpp -Iinclude -lwinhttp -static-libgcc -static-libstdc++ -Wl,--add-stdcall-alias
+g++ -shared -o bin/BatteryPlugin.dll src/BatteryPlugin.cpp src/dllmain.cpp -Iinclude -lwinhttp -static-libgcc -static-libstdc++ -Wl,--add-stdcall-alias
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo Direct build failed! Please check if g++ is installed and in PATH.
@@ -69,7 +69,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo Build successful (g++)!
-echo Plugin created at: %PROJECT_ROOT%\bin\TrafficMonitorBatteryPlugin.dll
+echo Plugin created at: %PROJECT_ROOT%\bin\BatteryPlugin.dll
 echo.
 pause
 popd

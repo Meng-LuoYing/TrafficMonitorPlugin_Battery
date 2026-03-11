@@ -16,13 +16,13 @@ set(SOURCES
 )
 
 # Create shared library
-add_library(TrafficMonitorBatteryPlugin SHARED ${SOURCES})
+add_library(BatteryPlugin SHARED ${SOURCES})
 
 # Link libraries
 # MinGW automatically links standard libraries, but we need winhttp
-target_link_libraries(TrafficMonitorBatteryPlugin PRIVATE winhttp)
+target_link_libraries(BatteryPlugin PRIVATE winhttp)
 
 # Ensure static linking for standard libraries to avoid dependency issues on other machines
 if(MINGW)
-    target_link_options(TrafficMonitorBatteryPlugin PRIVATE -static-libgcc -static-libstdc++ -Wl,--add-stdcall-alias)
+    target_link_options(BatteryPlugin PRIVATE -static-libgcc -static-libstdc++ -Wl,--add-stdcall-alias)
 endif()
