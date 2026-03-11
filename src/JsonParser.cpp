@@ -178,6 +178,24 @@ std::vector<DeviceBattery> ParseBatteryJson(const std::string& json)
 
         DeviceBattery dev;
         dev.id = Utf8ToWide(ExtractStringValue(obj, "id"));
+        if (dev.id.empty())
+        {
+            pos = objEnd;
+            size_t next = json.find_first_not_of(" \t\r\n,", pos);
+            if (next != std::string::npos && json[next] == ']')
+                break;
+            continue;
+        }
+
+        std::string source = ExtractStringValue(obj, "source");
+        if (!source.empty() && source != "ble")
+        {
+            pos = objEnd;
+            size_t next = json.find_first_not_of(" \t\r\n,", pos);
+            if (next != std::string::npos && json[next] == ']')
+                break;
+            continue;
+        }
 
         // renamedName takes priority over name
         std::string renamedName = ExtractStringValue(obj, "renamedName");
@@ -194,6 +212,8 @@ std::vector<DeviceBattery> ParseBatteryJson(const std::string& json)
             dev.name = Utf8ToWide(renamedName);
         else
             dev.name = Utf8ToWide(ExtractStringValue(obj, "name"));
+        if (dev.name.empty())
+            dev.name = L"Battery";
 
         dev.battery    = ExtractIntValue(obj, "battery", 0, -1);
         dev.isCharging = ExtractBoolValue(obj, "isCharging", 0);

@@ -37,6 +37,9 @@ private:
     bool m_initialized = false;
     ITrafficMonitor* m_pApp = nullptr;
     int m_apiPort = 18080;
+    std::wstring m_apiToken;
+    int m_authFailCount = 0;
+    bool m_pluginDisabled = false;
     int m_deviceSyncIntervalMs = 5000;
     int m_batteryRefreshIntervalMs = 2000;
     unsigned long long m_lastDeviceSyncTick = 0;

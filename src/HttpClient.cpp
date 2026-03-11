@@ -2,7 +2,7 @@
 #include "HttpClient.h"
 #include <winhttp.h>
 
-std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, int timeout_ms)
+std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, const wchar_t* token, int timeout_ms)
 {
     std::string result;
 
@@ -40,9 +40,18 @@ std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, int time
     // 设置超时
     WinHttpSetTimeouts(hRequest, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
 
+    std::wstring headers;
+    if (token != nullptr && token[0] != L'\0')
+    {
+        headers = L"X-Api-Token: ";
+        headers += token;
+        headers += L"\r\n";
+    }
+
     BOOL bSent = WinHttpSendRequest(
         hRequest,
-        WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+        headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
+        headers.empty() ? 0 : static_cast<DWORD>(-1L),
         WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
 
     if (bSent)

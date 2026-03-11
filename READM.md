@@ -71,6 +71,7 @@ cmake --build . --config Release
 1. 在 TrafficMonitor 中打开 **选项 -> 插件选项...**。
 2. 选择 **设备电量**，可配置以下参数：
    - API 端口（`1-65535`）
+   - Token（可选；将作为请求头 `X-Api-Token` 发送）
    - 设备变动检测间隔（秒，`1-3600`）
    - 电量刷新间隔（秒，`1-3600`）
 3. 点击确定后立即生效，并会自动保存到插件配置文件。
@@ -80,6 +81,8 @@ cmake --build . --config Release
 - `BatteryPlugin.ini`
 - 节点：`[network]`
 - 字段：`port`
+- 节点：`[auth]`
+  - 字段：`token`
 - 节点：`[timing]`
   - 字段：`device_sync_sec`
   - 字段：`battery_refresh_sec`
@@ -88,4 +91,6 @@ cmake --build . --config Release
 
 - **插件未显示**：确认 DLL 架构（x64/x86）与 TrafficMonitor 主程序一致。
 - **一直离线或无数据**：确认插件选项中的端口与本地服务一致，并检查接口可访问且返回含 `devices` 的 JSON。
+- **提示鉴权失败**：在插件选项中填写 Token；若服务端未启用鉴权可留空。
+- **鉴权连续失败**：失败时会弹出 Token 输入框，连续错误 3 次后插件会停止加载，需在插件选项中修正 Token。
 - **中文显示异常**：确认接口返回为 UTF-8 编码 JSON。
