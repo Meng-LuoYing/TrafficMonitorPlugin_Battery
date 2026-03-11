@@ -24,7 +24,7 @@ public:
 
 private:
     void InitDevices();
-    void FetchAndUpdate();
+    void FetchAndUpdate(bool syncDevices);
     void LoadConfig();
     void SaveConfig();
     void UpdateConfigDir(const wchar_t* dir);
@@ -37,6 +37,10 @@ private:
     bool m_initialized = false;
     ITrafficMonitor* m_pApp = nullptr;
     int m_apiPort = 18080;
+    int m_deviceSyncIntervalMs = 5000;
+    int m_batteryRefreshIntervalMs = 2000;
+    unsigned long long m_lastDeviceSyncTick = 0;
+    unsigned long long m_lastBatteryRefreshTick = 0;
     std::wstring m_configDir;
     mutable std::mutex m_mutex;
 
