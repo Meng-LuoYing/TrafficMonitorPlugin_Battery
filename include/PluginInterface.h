@@ -1,82 +1,188 @@
 #pragma once
-#include <Windows.h>
 
-// 插件接口版本
-// Plugin interface version
-#define TM_PLUGIN_API_VERSION 1
-
+// IPluginItem: interface for a single display item provided by a plugin
 class IPluginItem
 {
 public:
-    // 获取显示项目的名称
-    // Get the name of the display item
     virtual const wchar_t* GetItemName() const = 0;
-
-    // 获取显示项目的唯一ID
-    // Get the unique ID of the display item
     virtual const wchar_t* GetItemId() const = 0;
-
-    // 获取显示项目的标签文本
-    // Get the label text of the display item
     virtual const wchar_t* GetItemLableText() const = 0;
 
-    // 获取显示项目的值文本
-    // Get the value text of the display item
+    // Do NOT fetch data here; cache it in ITMPlugin::DataRequired and return here
     virtual const wchar_t* GetItemValueText() const = 0;
 
-    // 获取显示项目的值的示例文本（用于设置界面中预览）
-    // Get the sample text of the value of the display item (used for preview in the settings dialog)
+    // Sample text used by the host to compute column width
     virtual const wchar_t* GetItemValueSampleText() const = 0;
 
-    // 是否自定义绘制
-    // Whether to custom draw
-    virtual bool IsCustomDraw() const = 0;
+    // Return true to take over drawing; must also override DrawItem
+    virtual bool IsCustomDraw() const { return false; }
 
-    // 获取显示项目的宽度（仅在自定义绘制时有效）
-    // Get the width of the display item (only valid when custom draw)
-    virtual int GetItemWidth() const = 0;
+    // Minimum width at DPI=96; host will scale automatically
+    virtual int GetItemWidth() const { return 0; }
 
-    // 自定义绘制函数
-    // Custom draw function
-    virtual void OnDrawItem(void* hDC, int x, int y, int w, int h, bool dark_mode) = 0;
+    virtual void DrawItem(void* hDC, int x, int y, int w, int h, bool dark_mode) {}
 
-    // 鼠标事件处理函数
-    // Mouse event handler
-    virtual void OnMouseEvent(UINT message, WPARAM wParam, LPARAM lParam) = 0;
+    // Like GetItemWidth but receives hDC for text measurement; returns actual pixels
+    virtual int GetItemWidthEx(void* hDC) const { return 0; }
+
+    enum MouseEventType
+    {
+        MT_LCLICKED,
+        MT_RCLICKED,
+        MT_DBCLICKED,
+        MT_WHEEL_UP,
+        MT_WHEEL_DOWN,
+    };
+
+    enum MouseEventFlag
+    {
+        MF_TASKBAR_WND = 1 << 0,
+    };
+
+    // Return non-zero to consume the event (suppress host default action)
+    virtual int OnMouseEvent(MouseEventType type, int x, int y, void* hWnd, int flag) { return 0; }
+
+    enum KeyboardEventFlag
+    {
+        KF_TASKBAR_WND = 1 << 0,
+    };
+
+    virtual int OnKeboardEvent(int key, bool ctrl, bool shift, bool alt, void* hWnd, int flag) { return 0; }
+
+    enum ItemInfoType {};
+    virtual void* OnItemInfo(ItemInfoType, void* para1, void* para2) { return 0; }
+
+    // Return 1 to show a resource-usage bar in the taskbar
+    virtual int IsDrawResourceUsageGraph() const { return 0; }
+
+    // Value for the usage bar: 0.0 - 1.0
+    virtual float GetResourceUsageGraphValue() const { return 0.0; }
 };
 
+class ITrafficMonitor;
+
+// ITMPlugin: main plugin interface; one instance per DLL
 class ITMPlugin
 {
 public:
-    // 获取API版本
-    // Get API version
-    virtual int GetAPIVersion() const = 0;
+    // Do NOT override; identifies the API version implemented here
+    virtual int GetAPIVersion() const { return 7; }
 
-    // 获取显示项目
-    // Get display item
+    // Return the IPluginItem* for slot index, nullptr when index is out of range
     virtual IPluginItem* GetItem(int index) = 0;
 
-    // 数据更新
-    // Data update
+    // Called periodically by the host; fetch monitoring data here
     virtual void DataRequired() = 0;
 
-    // 获取插件信息
-    // Get plugin info
-    virtual const wchar_t* GetInfo(int index) = 0;
+    enum OptionReturn
+    {
+        OR_OPTION_CHANGED,
+        OR_OPTION_UNCHANGED,
+        OR_OPTION_NOT_PROVIDED
+    };
 
-    // 接收扩展信息
-    // Receive extended info
-    virtual void OnExtenedInfo(int index, const wchar_t* data) = 0;
-    
-    // 获取提示信息
-    // Get tooltip info
+    virtual OptionReturn ShowOptionsDialog(void* hParent) { return OR_OPTION_NOT_PROVIDED; }
+
+    enum PluginInfoIndex
+    {
+        TMI_NAME,
+        TMI_DESCRIPTION,
+        TMI_AUTHOR,
+        TMI_COPYRIGHT,
+        TMI_VERSION,
+        TMI_URL,
+        TMI_MAX
+    };
+
+    virtual const wchar_t* GetInfo(PluginInfoIndex index) = 0;
+
+    struct MonitorInfo
+    {
+        unsigned long long up_speed{};
+        unsigned long long down_speed{};
+        int cpu_usage{};
+        int memory_usage{};
+        int gpu_usage{};
+        int hdd_usage{};
+        int cpu_temperature{};
+        int gpu_temperature{};
+        int hdd_temperature{};
+        int main_board_temperature{};
+        int cpu_freq{};
+    };
+
+    virtual void OnMonitorInfo(const MonitorInfo& monitor_info) {}
     virtual const wchar_t* GetTooltipInfo() { return L""; }
+
+    enum ExtendedInfoIndex
+    {
+        EI_LABEL_TEXT_COLOR,
+        EI_VALUE_TEXT_COLOR,
+        EI_DRAW_TASKBAR_WND,
+        EI_NAIN_WND_NET_SPEED_SHORT_MODE,
+        EI_MAIN_WND_SPERATE_WITH_SPACE,
+        EI_MAIN_WND_UNIT_BYTE,
+        EI_MAIN_WND_UNIT_SELECT,
+        EI_MAIN_WND_NOT_SHOW_UNIT,
+        EI_MAIN_WND_NOT_SHOW_PERCENT,
+        EI_TASKBAR_WND_NET_SPEED_SHORT_MODE,
+        EI_TASKBAR_WND_SPERATE_WITH_SPACE,
+        EI_TASKBAR_WND_VALUE_RIGHT_ALIGN,
+        EI_TASKBAR_WND_NET_SPEED_WIDTH,
+        EI_TASKBAR_WND_UNIT_BYTE,
+        EI_TASKBAR_WND_UNIT_SELECT,
+        EI_TASKBAR_WND_NOT_SHOW_UNIT,
+        EI_TASKBAR_WND_NOT_SHOW_PERCENT,
+        EI_CONFIG_DIR,
+    };
+
+    virtual void OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data) {}
+    virtual void* GetPluginIcon() { return nullptr; }
+    virtual int GetCommandCount() { return 0; }
+    virtual const wchar_t* GetCommandName(int command_index) { return nullptr; }
+    virtual void* GetCommandIcon(int command_index) { return nullptr; }
+    virtual void OnPluginCommand(int command_index, void* hWnd, void* para) {}
+    virtual int IsCommandChecked(int command_index) { return false; }
+    virtual void OnInitialize(ITrafficMonitor* pApp) {}
 };
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-    __declspec(dllexport) ITMPlugin* TMPluginGetInstance();
-#ifdef __cplusplus
-}
-#endif
+// ITrafficMonitor: host application interface passed via OnInitialize
+class ITrafficMonitor
+{
+public:
+    virtual int GetAPIVersion() = 0;
+    virtual const wchar_t* GetVersion() = 0;
+
+    enum MonitorItem
+    {
+        MI_UP,
+        MI_DOWN,
+        MI_CPU,
+        MI_MEMORY,
+        MI_GPU_USAGE,
+        MI_CPU_TEMP,
+        MI_GPU_TEMP,
+        MI_HDD_TEMP,
+        MI_MAIN_BOARD_TEMP,
+        MI_HDD_USAGE,
+        MI_CPU_FREQ,
+        MI_TODAY_UP_TRAFFIC,
+        MI_TODAY_DOWN_TRAFFIC
+    };
+
+    virtual double GetMonitorValue(MonitorItem item) = 0;
+    virtual const wchar_t* GetMonitorValueString(MonitorItem item, int is_main_window = false) = 0;
+    virtual void ShowNotifyMessage(const wchar_t* strMsg) = 0;
+    virtual unsigned short GetLanguageId() const = 0;
+    virtual const wchar_t* GetPluginConfigDir() const = 0;
+
+    enum DPIType { DPI_MAIN_WND, DPI_TASKBAR };
+    virtual int GetDPI(DPIType type) const = 0;
+    virtual unsigned int GetThemeColor() const = 0;
+    virtual const wchar_t* GetStringRes(const wchar_t* key, const wchar_t* section) = 0;
+};
+
+/*
+ * The plugin DLL must export:
+ *   ITMPlugin* TMPluginGetInstance();
+ */
