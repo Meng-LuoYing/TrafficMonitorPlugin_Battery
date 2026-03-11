@@ -181,7 +181,16 @@ std::vector<DeviceBattery> ParseBatteryJson(const std::string& json)
 
         // renamedName takes priority over name
         std::string renamedName = ExtractStringValue(obj, "renamedName");
-        if (!renamedName.empty())
+        bool hasRenamedName = false;
+        for (char ch : renamedName)
+        {
+            if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
+            {
+                hasRenamedName = true;
+                break;
+            }
+        }
+        if (hasRenamedName)
             dev.name = Utf8ToWide(renamedName);
         else
             dev.name = Utf8ToWide(ExtractStringValue(obj, "name"));
