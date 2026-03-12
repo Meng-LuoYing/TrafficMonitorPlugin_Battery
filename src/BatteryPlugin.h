@@ -26,9 +26,12 @@ public:
 
     // 设备选择相关的公共方法
     std::vector<DeviceBattery> GetAvailableDevices() const;            // 获取可用设备列表
+    std::vector<std::wstring> GetSelectedDevices() const;              // 获取选中的设备列表（按顺序）
     void SetDeviceSelection(const std::wstring& deviceId, bool selected); // 设置设备选择状态
     bool IsDeviceSelected(const std::wstring& deviceId) const;          // 检查设备是否被选中
     void RefreshDevicesNow(); // 强制立即获取 API 数据并更新设备列表
+    void MoveDeviceUp(const std::wstring& deviceId);  // 设备顺序上移
+    void MoveDeviceDown(const std::wstring& deviceId); // 设备顺序下移
 
 private:
     void InitDevices();                    // 初始化设备
@@ -44,7 +47,7 @@ private:
 
     std::vector<std::unique_ptr<BatteryItem>> m_items;  // 插件项目列表
     std::unique_ptr<BatteryItem> m_displayItem;         // 显示项目
-    std::set<std::wstring> m_selectedDevices;           // 选中的设备ID集合
+    std::vector<std::wstring> m_selectedDevices;           // 选中的设备ID列表（按顺序）
     std::vector<DeviceBattery> m_availableDevices;      // 可用设备列表
     bool m_initialized = false;                         // 是否已初始化
     bool m_autoSelectFirstDevices = false;              // 是否自动选择前几个设备

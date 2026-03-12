@@ -5,6 +5,8 @@
 #include <cwchar>
 #include <shellapi.h>
 #include <sstream>
+#include <algorithm>
+#include <commctrl.h>
 
 // 选项对话框相关的匿名命名空间
 namespace
@@ -36,9 +38,11 @@ namespace
         HWND hCancelButton = nullptr;
         HWND hApplyButton = nullptr;
         HWND hRefreshButton = nullptr;
+        HWND hMoveUpButton = nullptr;
+        HWND hMoveDownButton = nullptr;
         HFONT hFont = nullptr;
         bool applied = false;
-        std::vector<HWND> deviceCheckboxes;
+        HWND hDeviceList = nullptr;
         std::vector<std::wstring> deviceIds;
         BatteryPlugin* plugin = nullptr;
         int scrollPos = 0;      // 当前垂直滚动位置（像素）
@@ -53,8 +57,11 @@ namespace
     constexpr int ID_APPLY_BUTTON = 1005;
     constexpr int ID_TOKEN_PROMPT_EDIT = 1101;
     constexpr int ID_REFRESH_BUTTON = 1102;
+    constexpr int ID_MOVE_UP_BUTTON = 1103;
+    constexpr int ID_MOVE_DOWN_BUTTON = 1104;
     constexpr int ID_DEVICE_CHECKBOX_BASE = 2000;
-    constexpr int DIALOG_WIDTH = 600;
+    constexpr int ID_DEVICE_LIST = 2001;
+    constexpr int DIALOG_WIDTH = 480;
     constexpr int DIALOG_HEIGHT = 560;
 
     // 尝试解析整数文本
@@ -116,46 +123,63 @@ namespace
 
     void RefreshDeviceList(OptionsDialogState* state, HWND hDialog)
     {
-        if (!state || !state->plugin || !hDialog) return;
+        if (!state || !state->plugin || !hDialog || !state->hDeviceList) return;
 
-        // Clear existing checkboxes (children of hDeviceGroup)
-        for (HWND hCheckbox : state->deviceCheckboxes)
-            if (hCheckbox) DestroyWindow(hCheckbox);
-        state->deviceCheckboxes.clear();
+        ListView_DeleteAllItems(state->hDeviceList);
         state->deviceIds.clear();
 
-        // Mark hDeviceGroup for background erase (will be applied on next paint, NOT immediately)
-        // Do NOT use RDW_UPDATENOW here: forcing paint while checkbox count is 0 would
-        // cause the groupbox to record/render an incorrect (smaller) height mid-refresh.
-        if (state->hDeviceGroup && IsWindow(state->hDeviceGroup))
-            RedrawWindow(state->hDeviceGroup, nullptr, nullptr,
-                RDW_INVALIDATE | RDW_ERASE);
-
-        // Get available devices and create checkboxes inside hDeviceGroup
+        // Get available devices and selected devices
         auto devices = state->plugin->GetAvailableDevices();
-        int y = 30;
-        for (size_t i = 0; i < devices.size() && i < 20; ++i)
+        auto selectedDevices = state->plugin->GetSelectedDevices();
+        
+        int lvIndex = 0;
+        
+        // 显示已选中的设备
+        for (const auto& selectedId : selectedDevices)
         {
-            const auto& dev = devices[i];
-            state->deviceIds.push_back(dev.id);
-            HWND hCheckbox = CreateWindowW(L"BUTTON", dev.name.c_str(),
-                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                16, y, 440, 20,
-                state->hDeviceGroup,
-                (HMENU)(INT_PTR)(ID_DEVICE_CHECKBOX_BASE + i), nullptr, nullptr);
-            bool isSelected = state->plugin->IsDeviceSelected(dev.id);
-            SendMessageW(hCheckbox, BM_SETCHECK, isSelected ? BST_CHECKED : BST_UNCHECKED, 0);
-            if (state->hFont)
-                SendMessageW(hCheckbox, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            state->deviceCheckboxes.push_back(hCheckbox);
-            y += 25;
+            for (const auto& dev : devices)
+            {
+                if (dev.id == selectedId)
+                {
+                    state->deviceIds.push_back(dev.id);
+                    LVITEMW lvi = {};
+                    lvi.mask = LVIF_TEXT;
+                    lvi.iItem = lvIndex;
+                    lvi.pszText = const_cast<LPWSTR>(dev.name.c_str());
+                    ListView_InsertItem(state->hDeviceList, &lvi);
+                    ListView_SetCheckState(state->hDeviceList, lvIndex, TRUE);
+                    lvIndex++;
+                    break;
+                }
+            }
         }
-
-        // Trigger re-layout to resize device group and update scroll info,
-        // then force a full synchronous repaint of the entire dialog
-        RECT rc;
-        GetClientRect(hDialog, &rc);
-        SendMessageW(hDialog, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
+        
+        // 显示未选中的设备
+        for (const auto& dev : devices)
+        {
+            // 跳过已选中的设备
+            bool isSelected = false;
+            for (const auto& selectedId : selectedDevices)
+            {
+                if (dev.id == selectedId)
+                {
+                    isSelected = true;
+                    break;
+                }
+            }
+            
+            if (!isSelected)
+            {
+                state->deviceIds.push_back(dev.id);
+                LVITEMW lvi = {};
+                lvi.mask = LVIF_TEXT;
+                lvi.iItem = lvIndex;
+                lvi.pszText = const_cast<LPWSTR>(dev.name.c_str());
+                ListView_InsertItem(state->hDeviceList, &lvi);
+                ListView_SetCheckState(state->hDeviceList, lvIndex, FALSE);
+                lvIndex++;
+            }
+        }
     }
 
     // Layout all controls accounting for current scroll position.
@@ -185,11 +209,8 @@ namespace
         const int timingH        = 124;
         const int deviceVirtTop  = timingVirtTop + timingH + 10;   // 282
 
-        // Device group height: 30px header + 25px per device + 26px bottom padding
-        // 26px bottom pad ensures the groupbox frame never clips the last checkbox
-        int numDevices = (int)state->deviceCheckboxes.size();
-        int deviceH = 30 + numDevices * 25 + 26;
-        if (deviceH < 60) deviceH = 60;
+        // Device group height
+        int deviceH = 150;
 
         state->totalContentH = deviceVirtTop + deviceH + 16;
 
@@ -240,14 +261,18 @@ namespace
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         // Refresh button: top-right inside device group
         if (state->hRefreshButton)
-            SetWindowPos(state->hRefreshButton, nullptr, groupW - 96, 18, 80, 24, SWP_NOZORDER | SWP_NOACTIVATE);
-        // Resize checkboxes so they don't overlap with the refresh button
+            SetWindowPos(state->hRefreshButton, nullptr, groupW - 80, 20, 64, 26, SWP_NOZORDER | SWP_NOACTIVATE);
+        // Move up button
+        if (state->hMoveUpButton)
+            SetWindowPos(state->hMoveUpButton, nullptr, groupW - 80, 56, 64, 26, SWP_NOZORDER | SWP_NOACTIVATE);
+        // Move down button
+        if (state->hMoveDownButton)
+            SetWindowPos(state->hMoveDownButton, nullptr, groupW - 80, 92, 64, 26, SWP_NOZORDER | SWP_NOACTIVATE);
+        // Resize List View
+        if (state->hDeviceList)
         {
-            int checkboxW = groupW - 16 - 96 - 8; // left_margin + btn_width + gap
-            if (checkboxW < 100) checkboxW = 100;
-            for (size_t i = 0; i < state->deviceCheckboxes.size(); ++i)
-                SetWindowPos(state->deviceCheckboxes[i], nullptr,
-                    16, 30 + (int)i * 25, checkboxW, 20, SWP_NOZORDER | SWP_NOACTIVATE);
+            int listW = groupW - 100;
+            SetWindowPos(state->hDeviceList, nullptr, 16, 20, listW, deviceH - 32, SWP_NOZORDER | SWP_NOACTIVATE);
         }
 
         // Fixed button bar
@@ -557,11 +582,35 @@ namespace
             SendMessageW(state->hDeviceSyncEdit, EM_SETLIMITTEXT, 4, 0);
             SendMessageW(state->hBatteryRefreshEdit, EM_SETLIMITTEXT, 4, 0);
 
-            // Refresh button: always visible inside device group (top-right)
+            // List View
+            state->hDeviceList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+                WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                16, 30, 400, 100,
+                state->hDeviceGroup, (HMENU)(INT_PTR)ID_DEVICE_LIST, nullptr, nullptr);
+            ListView_SetExtendedListViewStyle(state->hDeviceList, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+            
+            LVCOLUMNW lvc = {};
+            lvc.mask = LVCF_WIDTH;
+            lvc.cx = 380; // approximate initial width
+            ListView_InsertColumn(state->hDeviceList, 0, &lvc);
+
+            // Refresh button
             state->hRefreshButton = CreateWindowW(L"BUTTON", L"\u5237\u65B0",
                 WS_CHILD | WS_VISIBLE,
-                400, 18, 80, 24,
+                420, 20, 64, 26,
                 state->hDeviceGroup, (HMENU)(INT_PTR)ID_REFRESH_BUTTON, nullptr, nullptr);
+
+            // Move up button
+            state->hMoveUpButton = CreateWindowW(L"BUTTON", L"\u4E0A\u79FB", // 上移
+                WS_CHILD | WS_VISIBLE,
+                420, 56, 64, 26,
+                state->hDeviceGroup, (HMENU)(INT_PTR)ID_MOVE_UP_BUTTON, nullptr, nullptr);
+
+            // Move down button  
+            state->hMoveDownButton = CreateWindowW(L"BUTTON", L"\u4E0B\u79FB", // 下移
+                WS_CHILD | WS_VISIBLE,
+                420, 92, 64, 26,
+                state->hDeviceGroup, (HMENU)(INT_PTR)ID_MOVE_DOWN_BUTTON, nullptr, nullptr);
 
             // Bottom buttons (fixed, not scrolled)
             state->hApplyButton = CreateWindowW(L"BUTTON", L"\u5E94\u7528", WS_CHILD | WS_VISIBLE,
@@ -578,7 +627,9 @@ namespace
             setFont(state->hDeviceSyncLabel); setFont(state->hBatteryRefreshLabel);
             setFont(state->hPortEdit);     setFont(state->hTokenEdit);
             setFont(state->hDeviceSyncEdit); setFont(state->hBatteryRefreshEdit);
+            setFont(state->hDeviceList);
             setFont(state->hRefreshButton);
+            setFont(state->hMoveUpButton); setFont(state->hMoveDownButton);
             setFont(state->hOkButton); setFont(state->hCancelButton); setFont(state->hApplyButton);
 
             // Load device list (this also triggers WM_SIZE -> LayoutAndScroll)
@@ -605,6 +656,39 @@ namespace
             SetBkMode(hdc, TRANSPARENT);
             return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
         }
+        case WM_NOTIFY:
+        {
+            auto pnm = reinterpret_cast<LPNMHDR>(lParam);
+            if (!state || !state->plugin || !state->hDeviceList) return 0;
+
+            if (pnm->hwndFrom == state->hDeviceList && pnm->code == LVN_ITEMCHANGED)
+            {
+                auto pnmv = reinterpret_cast<LPNMLISTVIEW>(lParam);
+                // Check if the state image (checkbox) changed
+                if ((pnmv->uChanged & LVIF_STATE) && 
+                    (pnmv->uNewState & LVIS_STATEIMAGEMASK) != (pnmv->uOldState & LVIS_STATEIMAGEMASK))
+                {
+                    bool isChecked = ((pnmv->uNewState & LVIS_STATEIMAGEMASK) >> 12) == 2;
+                    if (isChecked)
+                    {
+                        // Enforce max 4 devices limit
+                        int checkedCount = 0;
+                        int count = ListView_GetItemCount(state->hDeviceList);
+                        for (int i = 0; i < count; ++i)
+                        {
+                            if (ListView_GetCheckState(state->hDeviceList, i))
+                                checkedCount++;
+                        }
+                        if (checkedCount > 4)
+                        {
+                            ListView_SetCheckState(state->hDeviceList, pnmv->iItem, FALSE);
+                            MessageBoxW(hWnd, L"最多只能选择 4 个设备在任务栏中显示。", L"数量限制", MB_ICONWARNING | MB_OK);
+                        }
+                    }
+                }
+            }
+            return 0;
+        }
         case WM_COMMAND:
         {
             const int cmd = LOWORD(wParam);
@@ -616,41 +700,97 @@ namespace
                 return 0;
             }
             
-            // Handle device checkbox changes
-            if (cmd >= ID_DEVICE_CHECKBOX_BASE && cmd < ID_DEVICE_CHECKBOX_BASE + 20 && state && state->plugin)
+            // Handle move up button
+            if (cmd == ID_MOVE_UP_BUTTON && state && state->plugin && state->hDeviceList)
             {
-                int index = cmd - ID_DEVICE_CHECKBOX_BASE;
-                if (index >= 0 && index < (int)state->deviceIds.size() && index < (int)state->deviceCheckboxes.size())
+                int curSel = ListView_GetNextItem(state->hDeviceList, -1, LVNI_SELECTED);
+                if (curSel > 0)
                 {
-                    HWND hCheckbox = state->deviceCheckboxes[index];
-                    bool isChecked = (SendMessageW(hCheckbox, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                    
-                    if (isChecked)
-                    {
-                        // Check how many are currently checked
-                        int checkedCount = 0;
-                        for (HWND hCb : state->deviceCheckboxes) {
-                            if (SendMessageW(hCb, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-                                checkedCount++;
-                            }
-                        }
-                        
-                        // If checking this one makes it 5, revert and warn
-                        if (checkedCount > 4) {
-                            SendMessageW(hCheckbox, BM_SETCHECK, BST_UNCHECKED, 0);
-                            MessageBoxW(hWnd, L"最多只能选择 4 个设备在任务栏中显示。", L"数量限制", MB_ICONWARNING | MB_OK);
-                            return 0; // Do not apply selection
-                        }
-                    }
+                    // Swap with the item above
+                    wchar_t itemText[1024];
+                    ListView_GetItemText(state->hDeviceList, curSel, 0, itemText, 1024);
+                    bool isChecked = ListView_GetCheckState(state->hDeviceList, curSel);
+                    std::wstring id = state->deviceIds[curSel];
 
-                    const std::wstring& deviceId = state->deviceIds[index];
-                    state->plugin->SetDeviceSelection(deviceId, isChecked);
+                    wchar_t aboveText[1024];
+                    ListView_GetItemText(state->hDeviceList, curSel - 1, 0, aboveText, 1024);
+                    bool aboveChecked = ListView_GetCheckState(state->hDeviceList, curSel - 1);
+                    std::wstring aboveId = state->deviceIds[curSel - 1];
+
+                    // Swap texts and states in list view
+                    ListView_SetItemText(state->hDeviceList, curSel, 0, aboveText);
+                    ListView_SetCheckState(state->hDeviceList, curSel, aboveChecked);
+                    state->deviceIds[curSel] = aboveId;
+
+                    ListView_SetItemText(state->hDeviceList, curSel - 1, 0, itemText);
+                    ListView_SetCheckState(state->hDeviceList, curSel - 1, isChecked);
+                    state->deviceIds[curSel - 1] = id;
+
+                    ListView_SetItemState(state->hDeviceList, curSel - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                }
+                return 0;
+            }
+            
+            // Handle move down button
+            if (cmd == ID_MOVE_DOWN_BUTTON && state && state->plugin && state->hDeviceList)
+            {
+                int curSel = ListView_GetNextItem(state->hDeviceList, -1, LVNI_SELECTED);
+                int count = ListView_GetItemCount(state->hDeviceList);
+                if (curSel >= 0 && curSel < count - 1)
+                {
+                    // Swap with the item below
+                    wchar_t itemText[1024];
+                    ListView_GetItemText(state->hDeviceList, curSel, 0, itemText, 1024);
+                    bool isChecked = ListView_GetCheckState(state->hDeviceList, curSel);
+                    std::wstring id = state->deviceIds[curSel];
+
+                    wchar_t belowText[1024];
+                    ListView_GetItemText(state->hDeviceList, curSel + 1, 0, belowText, 1024);
+                    bool belowChecked = ListView_GetCheckState(state->hDeviceList, curSel + 1);
+                    std::wstring belowId = state->deviceIds[curSel + 1];
+
+                    // Swap texts and states in list view
+                    ListView_SetItemText(state->hDeviceList, curSel, 0, belowText);
+                    ListView_SetCheckState(state->hDeviceList, curSel, belowChecked);
+                    state->deviceIds[curSel] = belowId;
+
+                    ListView_SetItemText(state->hDeviceList, curSel + 1, 0, itemText);
+                    ListView_SetCheckState(state->hDeviceList, curSel + 1, isChecked);
+                    state->deviceIds[curSel + 1] = id;
+
+                    ListView_SetItemState(state->hDeviceList, curSel + 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
                 }
                 return 0;
             }
             
             if ((cmd == IDOK || cmd == ID_APPLY_BUTTON) && state && state->hPortEdit && state->hTokenEdit && state->hDeviceSyncEdit && state->hBatteryRefreshEdit)
             {
+                // Apply device selections and ordering based on ListView state
+                if (state->hDeviceList && state->plugin)
+                {
+                    // For Apply/OK, we clear the plugin selected devices, and iterate the list from top to bottom.
+                    // If checked, we add the corresponding device ID.
+                    int count = ListView_GetItemCount(state->hDeviceList);
+                    std::vector<std::pair<std::wstring, bool>> selectionsToApply;
+                    for (int i = 0; i < count; ++i)
+                    {
+                        bool isChecked = ListView_GetCheckState(state->hDeviceList, i);
+                        selectionsToApply.push_back({ state->deviceIds[i], isChecked });
+                    }
+
+                    // Loop and clear all first, then set in order
+                    state->plugin->GetSelectedDevices(); // ensure plugin loads, not really necessary
+                    auto existing = state->plugin->GetAvailableDevices();
+                    for (const auto& dev : existing) {
+                        state->plugin->SetDeviceSelection(dev.id, false);
+                    }
+                    for (const auto& sel : selectionsToApply) {
+                        if (sel.second) {
+                            state->plugin->SetDeviceSelection(sel.first, true);
+                        }
+                    }
+                }
+
                 wchar_t portText[32] = {};
                 wchar_t tokenText[512] = {};
                 wchar_t syncText[32] = {};
@@ -756,13 +896,16 @@ namespace
                 DeleteObject(state->hFont);
                 state->hFont = nullptr;
             }
-            // Clean up device checkboxes
-            for (HWND hCheckbox : state->deviceCheckboxes)
+            // Clean up list view
+            if (state && state->hDeviceList)
             {
-                if (hCheckbox) DestroyWindow(hCheckbox);
+                DestroyWindow(state->hDeviceList);
+                state->hDeviceList = nullptr;
             }
-            state->deviceCheckboxes.clear();
-            state->deviceIds.clear();
+            if (state)
+            {
+                state->deviceIds.clear();
+            }
             return 0;
         default:
             break;
@@ -1002,7 +1145,7 @@ void BatteryPlugin::FetchAndUpdate(bool syncDevices)
             m_autoSelectFirstDevices = false;
             for (const auto& dev : devices) {
                 if (m_selectedDevices.size() >= 4) break;
-                m_selectedDevices.insert(dev.id);
+                m_selectedDevices.push_back(dev.id);
             }
             needsRebuild = true;
         }
@@ -1145,7 +1288,7 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
     int newBatteryRefreshSec = currentBatteryRefreshSec;
     
     // Track if device selection changed to force restart
-    std::set<std::wstring> oldSelected;
+    std::vector<std::wstring> oldSelected;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         oldSelected = m_selectedDevices;
@@ -1282,12 +1425,13 @@ void BatteryPlugin::LoadConfig()
     {
         std::wstringstream ss(selectedDevicesText);
         std::wstring deviceId;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_selectedDevices.clear();
         while (std::getline(ss, deviceId, L','))
         {
             if (!deviceId.empty())
             {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_selectedDevices.insert(deviceId);
+                m_selectedDevices.push_back(deviceId);
             }
         }
     }
@@ -1306,7 +1450,7 @@ void BatteryPlugin::SaveConfig()
     std::wstring token;
     int deviceSyncSec = 5;
     int batteryRefreshSec = 2;
-    std::set<std::wstring> selectedDevices;
+    std::vector<std::wstring> selectedDevices;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         port = m_apiPort;
@@ -1388,19 +1532,32 @@ std::vector<DeviceBattery> BatteryPlugin::GetAvailableDevices() const
     return m_availableDevices;
 }
 
+std::vector<std::wstring> BatteryPlugin::GetSelectedDevices() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_selectedDevices;
+}
+
 void BatteryPlugin::SetDeviceSelection(const std::wstring& deviceId, bool selected)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (selected)
-        m_selectedDevices.insert(deviceId);
-    else
-        m_selectedDevices.erase(deviceId);
+    auto it = std::find(m_selectedDevices.begin(), m_selectedDevices.end(), deviceId);
+    if (selected && it == m_selectedDevices.end())
+    {
+        // 如果设备未被选中，则添加到末尾
+        m_selectedDevices.push_back(deviceId);
+    }
+    else if (!selected && it != m_selectedDevices.end())
+    {
+        // 如果设备已被选中，则移除
+        m_selectedDevices.erase(it);
+    }
 }
 
 bool BatteryPlugin::IsDeviceSelected(const std::wstring& deviceId) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_selectedDevices.count(deviceId) > 0;
+    return std::find(m_selectedDevices.begin(), m_selectedDevices.end(), deviceId) != m_selectedDevices.end();
 }
 
 void BatteryPlugin::RefreshDevicesNow()
@@ -1408,6 +1565,50 @@ void BatteryPlugin::RefreshDevicesNow()
     // Makes a blocking HTTP request to get the latest device list.
     // Called from the dialog UI thread when the user clicks the Refresh button.
     FetchAndUpdate(true);
+}
+
+// 设备顺序上移
+void BatteryPlugin::MoveDeviceUp(const std::wstring& deviceId)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = std::find(m_selectedDevices.begin(), m_selectedDevices.end(), deviceId);
+    if (it == m_selectedDevices.end())
+    {
+        // 设备不存在于选中列表中
+        return;
+    }
+    
+    if (it == m_selectedDevices.begin())
+    {
+        // 设备已经是第一个，无法上移
+        return;
+    }
+    
+    // 与前一个设备交换位置
+    std::iter_swap(it, it - 1);
+    RebuildItems();
+}
+
+// 设备顺序下移
+void BatteryPlugin::MoveDeviceDown(const std::wstring& deviceId)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = std::find(m_selectedDevices.begin(), m_selectedDevices.end(), deviceId);
+    if (it == m_selectedDevices.end())
+    {
+        // 设备不存在于选中列表中
+        return;
+    }
+    
+    if (it + 1 == m_selectedDevices.end())
+    {
+        // 设备已经是最后一个，无法下移
+        return;
+    }
+    
+    // 与后一个设备交换位置
+    std::iter_swap(it, it + 1);
+    RebuildItems();
 }
 
 ITMPlugin* TMPluginGetInstance()
