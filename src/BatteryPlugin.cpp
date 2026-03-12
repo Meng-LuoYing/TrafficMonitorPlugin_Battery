@@ -4,6 +4,7 @@
 #include "JsonParser.h"
 #include <cwchar>
 #include <shellapi.h>
+#include <sstream>
 
 namespace
 {
@@ -24,6 +25,7 @@ namespace
         HWND hBatteryRefreshEdit = nullptr;
         HWND hNetworkGroup = nullptr;
         HWND hTimingGroup = nullptr;
+        HWND hDeviceGroup = nullptr;
         HWND hPortLabel = nullptr;
         HWND hTokenLabel = nullptr;
         HWND hDeviceSyncLabel = nullptr;
@@ -31,8 +33,14 @@ namespace
         HWND hOkButton = nullptr;
         HWND hCancelButton = nullptr;
         HWND hApplyButton = nullptr;
+        HWND hRefreshButton = nullptr;
         HFONT hFont = nullptr;
         bool applied = false;
+        std::vector<HWND> deviceCheckboxes;
+        std::vector<std::wstring> deviceIds;
+        BatteryPlugin* plugin = nullptr;
+        int scrollPos = 0;      // current vertical scroll position (pixels)
+        int totalContentH = 0;  // total virtual content height (pixels)
     };
 
     constexpr int ID_PORT_EDIT = 1001;
@@ -41,8 +49,10 @@ namespace
     constexpr int ID_BATTERY_REFRESH_EDIT = 1004;
     constexpr int ID_APPLY_BUTTON = 1005;
     constexpr int ID_TOKEN_PROMPT_EDIT = 1101;
-    constexpr int DIALOG_WIDTH = 520;
-    constexpr int DIALOG_HEIGHT = 340;
+    constexpr int ID_REFRESH_BUTTON = 1102;
+    constexpr int ID_DEVICE_CHECKBOX_BASE = 2000;
+    constexpr int DIALOG_WIDTH = 600;
+    constexpr int DIALOG_HEIGHT = 560;
 
     bool TryParseInteger(const wchar_t* text, int minValue, int maxValue, int& out)
     {
@@ -54,6 +64,197 @@ namespace
             return false;
         out = static_cast<int>(value);
         return true;
+    }
+
+    // Subclass proc for hDeviceGroup:
+    // (1) Forwards WM_COMMAND from child controls (checkboxes, refresh button) to the main dialog.
+    // (2) Returns a white brush for WM_CTLCOLORBTN so checkboxes have a clean background.
+    LRESULT CALLBACK DeviceGroupSubclassProc(
+        HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam,
+        UINT_PTR uIdSubclass, DWORD_PTR /*dwRefData*/)
+    {
+        switch (msg)
+        {
+        case WM_COMMAND:
+            // Forward to grandparent (PortDialogProc)
+            SendMessageW(GetParent(hWnd), WM_COMMAND, wParam, lParam);
+            return 0;
+        case WM_CTLCOLORBTN:
+        {
+            // Remove the grey background from child checkboxes/buttons
+            HDC hdc = (HDC)wParam;
+            SetBkMode(hdc, TRANSPARENT);
+            return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+        }
+        case WM_CTLCOLORSTATIC:
+        {
+            // Remove the grey background from child checkboxes (they also send STATIC messages)
+            HDC hdc = (HDC)wParam;
+            SetBkMode(hdc, TRANSPARENT);
+            return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+        }
+        case WM_ERASEBKGND:
+        {
+            // Windows GroupBox doesn't erase its background properly when resized larger,
+            // leaving behind old borders. We manually erase it here with the window color.
+            HDC hdc = (HDC)wParam;
+            RECT rc;
+            GetClientRect(hWnd, &rc);
+            FillRect(hdc, &rc, GetSysColorBrush(COLOR_WINDOW));
+            return 1; // Return non-zero to indicate we handled erasure
+        }
+        case WM_NCDESTROY:
+            RemoveWindowSubclass(hWnd, DeviceGroupSubclassProc, uIdSubclass);
+            break;
+        }
+        return DefSubclassProc(hWnd, msg, wParam, lParam);
+    }
+
+    void RefreshDeviceList(OptionsDialogState* state, HWND hDialog)
+    {
+        if (!state || !state->plugin || !hDialog) return;
+
+        // Clear existing checkboxes (children of hDeviceGroup)
+        for (HWND hCheckbox : state->deviceCheckboxes)
+            if (hCheckbox) DestroyWindow(hCheckbox);
+        state->deviceCheckboxes.clear();
+        state->deviceIds.clear();
+
+        // Mark hDeviceGroup for background erase (will be applied on next paint, NOT immediately)
+        // Do NOT use RDW_UPDATENOW here: forcing paint while checkbox count is 0 would
+        // cause the groupbox to record/render an incorrect (smaller) height mid-refresh.
+        if (state->hDeviceGroup && IsWindow(state->hDeviceGroup))
+            RedrawWindow(state->hDeviceGroup, nullptr, nullptr,
+                RDW_INVALIDATE | RDW_ERASE);
+
+        // Get available devices and create checkboxes inside hDeviceGroup
+        auto devices = state->plugin->GetAvailableDevices();
+        int y = 30;
+        for (size_t i = 0; i < devices.size() && i < 20; ++i)
+        {
+            const auto& dev = devices[i];
+            state->deviceIds.push_back(dev.id);
+            HWND hCheckbox = CreateWindowW(L"BUTTON", dev.name.c_str(),
+                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                16, y, 440, 20,
+                state->hDeviceGroup,
+                (HMENU)(INT_PTR)(ID_DEVICE_CHECKBOX_BASE + i), nullptr, nullptr);
+            bool isSelected = state->plugin->IsDeviceSelected(dev.id);
+            SendMessageW(hCheckbox, BM_SETCHECK, isSelected ? BST_CHECKED : BST_UNCHECKED, 0);
+            if (state->hFont)
+                SendMessageW(hCheckbox, WM_SETFONT, (WPARAM)state->hFont, TRUE);
+            state->deviceCheckboxes.push_back(hCheckbox);
+            y += 25;
+        }
+
+        // Trigger re-layout to resize device group and update scroll info,
+        // then force a full synchronous repaint of the entire dialog
+        RECT rc;
+        GetClientRect(hDialog, &rc);
+        SendMessageW(hDialog, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
+    }
+
+    // Layout all controls accounting for current scroll position.
+    // Content controls are shifted by -scrollPos; button bar stays fixed.
+    void LayoutAndScroll(OptionsDialogState* state, HWND hWnd)
+    {
+        if (!state || !state->hNetworkGroup) return;
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int clientW = rc.right;
+        int clientH = rc.bottom;
+
+        const int margin    = 16;
+        const int buttonH   = 28;
+        const int buttonGap = 8;
+        const int buttonBarH = buttonH + 28; // reserved at bottom
+        int contentAreaH = clientH - buttonBarH;
+        if (contentAreaH < 50) contentAreaH = 50;
+        int buttonY = clientH - buttonH - 14;
+        int groupW  = clientW - margin * 2;
+        if (groupW < 200) groupW = 200;
+
+        // Logical (unscrolled) top positions
+        const int networkVirtTop = 16;
+        const int networkH       = 122;
+        const int timingVirtTop  = networkVirtTop + networkH + 10; // 148
+        const int timingH        = 124;
+        const int deviceVirtTop  = timingVirtTop + timingH + 10;   // 282
+
+        // Device group height: 30px header + 25px per device + 26px bottom padding
+        // 26px bottom pad ensures the groupbox frame never clips the last checkbox
+        int numDevices = (int)state->deviceCheckboxes.size();
+        int deviceH = 30 + numDevices * 25 + 26;
+        if (deviceH < 60) deviceH = 60;
+
+        state->totalContentH = deviceVirtTop + deviceH + 16;
+
+        // Clamp scroll position - 确保设备移除后滚动位置正确
+        int maxScroll = state->totalContentH - contentAreaH;
+        if (maxScroll < 0) maxScroll = 0;
+        if (state->scrollPos < 0) state->scrollPos = 0;
+        if (state->scrollPos > maxScroll) state->scrollPos = maxScroll;
+        
+        // 如果内容高度小于可视区域，重置滚动位置到顶部
+        if (state->totalContentH <= contentAreaH)
+        {
+            state->scrollPos = 0;
+        }
+
+        // Update main window scrollbar
+        SCROLLINFO si = {};
+        si.cbSize = sizeof(si);
+        si.fMask  = SIF_RANGE | SIF_PAGE | SIF_POS;
+        si.nMin   = 0;
+        si.nMax   = state->totalContentH;
+        si.nPage  = (UINT)contentAreaH;
+        si.nPos   = state->scrollPos;
+        SetScrollInfo(hWnd, SB_VERT, &si, TRUE);
+
+        int sp = state->scrollPos;
+        int labelLeft = margin + 16;
+        int valueLeft = 290;
+        int valueW    = groupW - (valueLeft - margin) - 20;
+        if (valueW < 100) valueW = 100;
+
+        // Network group + controls
+        SetWindowPos(state->hNetworkGroup,      nullptr, margin, networkVirtTop - sp, groupW, networkH, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hPortLabel,         nullptr, labelLeft, networkVirtTop + 26 - sp, 130, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hPortEdit,          nullptr, valueLeft, networkVirtTop + 22 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hTokenLabel,        nullptr, labelLeft, networkVirtTop + 70 - sp, 130, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hTokenEdit,         nullptr, valueLeft, networkVirtTop + 66 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+
+        // Timing group + controls
+        SetWindowPos(state->hTimingGroup,        nullptr, margin, timingVirtTop - sp, groupW, timingH, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hDeviceSyncLabel,    nullptr, labelLeft, timingVirtTop + 26 - sp, 260, 20, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hDeviceSyncEdit,     nullptr, valueLeft, timingVirtTop + 22 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hBatteryRefreshLabel,nullptr, labelLeft, timingVirtTop + 70 - sp, 260, 20, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hBatteryRefreshEdit, nullptr, valueLeft, timingVirtTop + 66 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+
+        // Device group: resize with SWP_FRAMECHANGED so the groupbox border is redrawn correctly
+        SetWindowPos(state->hDeviceGroup, nullptr, margin, deviceVirtTop - sp, groupW, deviceH,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        // Refresh button: top-right inside device group
+        if (state->hRefreshButton)
+            SetWindowPos(state->hRefreshButton, nullptr, groupW - 96, 18, 80, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+        // Resize checkboxes so they don't overlap with the refresh button
+        {
+            int checkboxW = groupW - 16 - 96 - 8; // left_margin + btn_width + gap
+            if (checkboxW < 100) checkboxW = 100;
+            for (size_t i = 0; i < state->deviceCheckboxes.size(); ++i)
+                SetWindowPos(state->deviceCheckboxes[i], nullptr,
+                    16, 30 + (int)i * 25, checkboxW, 20, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
+        // Fixed button bar
+        int right = clientW - margin;
+        SetWindowPos(state->hCancelButton, nullptr, right - 80,                         buttonY, 80, buttonH, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hOkButton,     nullptr, right - 80 * 2 - buttonGap,        buttonY, 80, buttonH, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hApplyButton,  nullptr, right - 80 * 3 - buttonGap * 2,    buttonY, 80, buttonH, SWP_NOZORDER | SWP_NOACTIVATE);
+
+        // Full synchronous repaint: erase background, redraw frames and all children
+        RedrawWindow(hWnd, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
     }
 
     bool IsAuthFailedResponse(const std::string& json)
@@ -304,28 +505,30 @@ namespace
             NONCLIENTMETRICSW ncm = {};
             ncm.cbSize = sizeof(ncm);
             if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
-            {
                 state->hFont = CreateFontIndirectW(&ncm.lfMessageFont);
-            }
             if (!state->hFont)
-            {
                 state->hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-            }
 
-            state->hNetworkGroup = CreateWindowW(L"BUTTON", L"网络设置",
-                WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 16, 16, 488, 122, hWnd, nullptr, nullptr, nullptr);
-            state->hTimingGroup = CreateWindowW(L"BUTTON", L"刷新设置",
-                WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 16, 148, 488, 124, hWnd, nullptr, nullptr, nullptr);
+            // All controls are direct children of hWnd (no intermediate STATIC container).
+            // Groups
+            state->hNetworkGroup = CreateWindowW(L"BUTTON", L"\u7F51\u7EDC\u8BBE\u7F6E",
+                WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 16, 16, 500, 122, hWnd, nullptr, nullptr, nullptr);
+            state->hTimingGroup = CreateWindowW(L"BUTTON", L"\u5237\u65B0\u8BBE\u7F6E",
+                WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 16, 148, 500, 124, hWnd, nullptr, nullptr, nullptr);
+            state->hDeviceGroup = CreateWindowW(L"BUTTON", L"\u8BBE\u5907\u663E\u793A\u9009\u62E9",
+                WS_CHILD | WS_VISIBLE | BS_GROUPBOX | WS_CLIPCHILDREN, 16, 282, 500, 100, hWnd, nullptr, nullptr, nullptr);
 
-            state->hPortLabel = CreateWindowW(L"STATIC", L"API 端口：",
-                WS_CHILD | WS_VISIBLE, 32, 46, 100, 20, hWnd, nullptr, nullptr, nullptr);
-            state->hTokenLabel = CreateWindowW(L"STATIC", L"Token：",
-                WS_CHILD | WS_VISIBLE, 32, 90, 100, 20, hWnd, nullptr, nullptr, nullptr);
-            state->hDeviceSyncLabel = CreateWindowW(L"STATIC", L"设备变动检测间隔（秒，1-3600）：",
-                WS_CHILD | WS_VISIBLE, 32, 178, 250, 20, hWnd, nullptr, nullptr, nullptr);
-            state->hBatteryRefreshLabel = CreateWindowW(L"STATIC", L"电量刷新间隔（秒，1-3600）：",
-                WS_CHILD | WS_VISIBLE, 32, 222, 250, 20, hWnd, nullptr, nullptr, nullptr);
+            // Labels
+            state->hPortLabel = CreateWindowW(L"STATIC", L"API \u7AEF\u53E3\uFF1A",
+                WS_CHILD | WS_VISIBLE, 32, 46, 130, 20, hWnd, nullptr, nullptr, nullptr);
+            state->hTokenLabel = CreateWindowW(L"STATIC", L"Token\uFF1A",
+                WS_CHILD | WS_VISIBLE, 32, 90, 130, 20, hWnd, nullptr, nullptr, nullptr);
+            state->hDeviceSyncLabel = CreateWindowW(L"STATIC", L"\u8BBE\u5907\u53D8\u52A8\u68C0\u6D4B\u95F4\u9694\uFF08\u79D2\uFF0C1-3600\uFF09\uFF1A",
+                WS_CHILD | WS_VISIBLE, 32, 178, 260, 20, hWnd, nullptr, nullptr, nullptr);
+            state->hBatteryRefreshLabel = CreateWindowW(L"STATIC", L"\u7535\u91CF\u5237\u65B0\u95F4\u9694\uFF08\u79D2\uFF0C1-3600\uFF09\uFF1A",
+                WS_CHILD | WS_VISIBLE, 32, 222, 260, 20, hWnd, nullptr, nullptr, nullptr);
 
+            // Edits
             wchar_t portText[16] = {};
             wchar_t syncText[16] = {};
             wchar_t refreshText[16] = {};
@@ -334,93 +537,60 @@ namespace
             wsprintfW(refreshText, L"%d", state->currentBatteryRefreshSec);
 
             state->hPortEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", portText,
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 132, 42, 352, 24,
+                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 42, 274, 24,
                 hWnd, (HMENU)(INT_PTR)ID_PORT_EDIT, nullptr, nullptr);
             state->hTokenEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", state->currentToken.c_str(),
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 132, 86, 352, 24,
+                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 86, 274, 24,
                 hWnd, (HMENU)(INT_PTR)ID_TOKEN_EDIT, nullptr, nullptr);
             state->hDeviceSyncEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", syncText,
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 174, 194, 24,
+                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 174, 274, 24,
                 hWnd, (HMENU)(INT_PTR)ID_DEVICE_SYNC_EDIT, nullptr, nullptr);
             state->hBatteryRefreshEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", refreshText,
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 218, 194, 24,
+                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 218, 274, 24,
                 hWnd, (HMENU)(INT_PTR)ID_BATTERY_REFRESH_EDIT, nullptr, nullptr);
             SendMessageW(state->hPortEdit, EM_SETLIMITTEXT, 5, 0);
             SendMessageW(state->hTokenEdit, EM_SETLIMITTEXT, 256, 0);
             SendMessageW(state->hDeviceSyncEdit, EM_SETLIMITTEXT, 4, 0);
             SendMessageW(state->hBatteryRefreshEdit, EM_SETLIMITTEXT, 4, 0);
 
-            state->hOkButton = CreateWindowW(L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                332, 296, 80, 28, hWnd, (HMENU)(INT_PTR)IDOK, nullptr, nullptr);
-            state->hCancelButton = CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE,
-                420, 296, 80, 28, hWnd, (HMENU)(INT_PTR)IDCANCEL, nullptr, nullptr);
-            state->hApplyButton = CreateWindowW(L"BUTTON", L"应用", WS_CHILD | WS_VISIBLE,
-                244, 296, 80, 28, hWnd, (HMENU)(INT_PTR)ID_APPLY_BUTTON, nullptr, nullptr);
+            // Refresh button: always visible inside device group (top-right)
+            state->hRefreshButton = CreateWindowW(L"BUTTON", L"\u5237\u65B0",
+                WS_CHILD | WS_VISIBLE,
+                400, 18, 80, 24,
+                state->hDeviceGroup, (HMENU)(INT_PTR)ID_REFRESH_BUTTON, nullptr, nullptr);
 
-            SendMessageW(state->hNetworkGroup, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hTimingGroup, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hPortLabel, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hTokenLabel, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hDeviceSyncLabel, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hBatteryRefreshLabel, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hPortEdit, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hTokenEdit, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hDeviceSyncEdit, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hBatteryRefreshEdit, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hOkButton, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hCancelButton, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hApplyButton, WM_SETFONT, (WPARAM)state->hFont, TRUE);
+            // Bottom buttons (fixed, not scrolled)
+            state->hApplyButton = CreateWindowW(L"BUTTON", L"\u5E94\u7528", WS_CHILD | WS_VISIBLE,
+                226, DIALOG_HEIGHT - 40, 80, 28, hWnd, (HMENU)(INT_PTR)ID_APPLY_BUTTON, nullptr, nullptr);
+            state->hOkButton = CreateWindowW(L"BUTTON", L"\u786E\u5B9A", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                314, DIALOG_HEIGHT - 40, 80, 28, hWnd, (HMENU)(INT_PTR)IDOK, nullptr, nullptr);
+            state->hCancelButton = CreateWindowW(L"BUTTON", L"\u53D6\u6D88", WS_CHILD | WS_VISIBLE,
+                402, DIALOG_HEIGHT - 40, 80, 28, hWnd, (HMENU)(INT_PTR)IDCANCEL, nullptr, nullptr);
 
-            RECT rc = {};
-            GetClientRect(hWnd, &rc);
-            SendMessageW(hWnd, WM_SIZE, 0, MAKELPARAM(rc.right - rc.left, rc.bottom - rc.top));
+            // Apply font to all controls
+            auto setFont = [&](HWND h) { if (h && state->hFont) SendMessageW(h, WM_SETFONT, (WPARAM)state->hFont, TRUE); };
+            setFont(state->hNetworkGroup); setFont(state->hTimingGroup); setFont(state->hDeviceGroup);
+            setFont(state->hPortLabel);    setFont(state->hTokenLabel);
+            setFont(state->hDeviceSyncLabel); setFont(state->hBatteryRefreshLabel);
+            setFont(state->hPortEdit);     setFont(state->hTokenEdit);
+            setFont(state->hDeviceSyncEdit); setFont(state->hBatteryRefreshEdit);
+            setFont(state->hRefreshButton);
+            setFont(state->hOkButton); setFont(state->hCancelButton); setFont(state->hApplyButton);
+
+            // Load device list (this also triggers WM_SIZE -> LayoutAndScroll)
+            RefreshDeviceList(state, hWnd);
+
+            // Subclass hDeviceGroup to forward WM_COMMAND to hWnd and provide white background
+            SetWindowSubclass(state->hDeviceGroup, DeviceGroupSubclassProc, 1, 0);
             return 0;
         }
         case WM_SIZE:
-        {
-            if (!state) return 0;
-            int clientW = LOWORD(lParam);
-            int clientH = HIWORD(lParam);
-            int margin = 16;
-            int groupW = clientW - margin * 2;
-            if (groupW < 420) groupW = 420;
-            int buttonW = 80;
-            int buttonH = 28;
-            int buttonGap = 8;
-            int buttonY = clientH - buttonH - 14;
-            int right = clientW - 20;
-            int networkTop = 16;
-            int networkHeight = 122;
-            int timingTop = networkTop + networkHeight + 10;
-            int timingHeight = buttonY - 12 - timingTop;
-            if (timingHeight < 108) timingHeight = 108;
-            int labelLeft = 32;
-            int valueLeft = 290;
-            int valueW = groupW - (valueLeft - margin) - 20;
-            if (valueW < 160) valueW = 160;
-
-            SetWindowPos(state->hNetworkGroup, nullptr, margin, networkTop, groupW, networkHeight, SWP_NOZORDER);
-            SetWindowPos(state->hTimingGroup, nullptr, margin, timingTop, groupW, timingHeight, SWP_NOZORDER);
-            SetWindowPos(state->hPortLabel, nullptr, labelLeft, networkTop + 26, 100, 20, SWP_NOZORDER);
-            SetWindowPos(state->hPortEdit, nullptr, 132, networkTop + 22, groupW - 132 - 20, 24, SWP_NOZORDER);
-            SetWindowPos(state->hTokenLabel, nullptr, labelLeft, networkTop + 70, 100, 20, SWP_NOZORDER);
-            SetWindowPos(state->hTokenEdit, nullptr, 132, networkTop + 66, groupW - 132 - 20, 24, SWP_NOZORDER);
-            SetWindowPos(state->hDeviceSyncLabel, nullptr, labelLeft, timingTop + 26, 250, 20, SWP_NOZORDER);
-            SetWindowPos(state->hDeviceSyncEdit, nullptr, valueLeft, timingTop + 22, valueW, 24, SWP_NOZORDER);
-            SetWindowPos(state->hBatteryRefreshLabel, nullptr, labelLeft, timingTop + 70, 250, 20, SWP_NOZORDER);
-            SetWindowPos(state->hBatteryRefreshEdit, nullptr, valueLeft, timingTop + 66, valueW, 24, SWP_NOZORDER);
-
-            SetWindowPos(state->hCancelButton, nullptr, right - buttonW, buttonY, buttonW, buttonH, SWP_NOZORDER);
-            SetWindowPos(state->hOkButton, nullptr, right - buttonW * 2 - buttonGap, buttonY, buttonW, buttonH, SWP_NOZORDER);
-            SetWindowPos(state->hApplyButton, nullptr, right - buttonW * 3 - buttonGap * 2, buttonY, buttonW, buttonH, SWP_NOZORDER);
+            if (state) LayoutAndScroll(state, hWnd);
             return 0;
-        }
         case WM_SHOWWINDOW:
             if (wParam && state && state->hPortEdit)
             {
-                RECT rc = {};
-                GetClientRect(hWnd, &rc);
-                SendMessageW(hWnd, WM_SIZE, 0, MAKELPARAM(rc.right - rc.left, rc.bottom - rc.top));
+                LayoutAndScroll(state, hWnd);
                 SetFocus(state->hPortEdit);
                 SendMessageW(state->hPortEdit, EM_SETSEL, 0, -1);
             }
@@ -434,6 +604,47 @@ namespace
         case WM_COMMAND:
         {
             const int cmd = LOWORD(wParam);
+            if (cmd == ID_REFRESH_BUTTON && state && state->plugin)
+            {
+                // Force a live API fetch first, then update the checkbox list
+                state->plugin->RefreshDevicesNow();
+                RefreshDeviceList(state, hWnd);
+                return 0;
+            }
+            
+            // Handle device checkbox changes
+            if (cmd >= ID_DEVICE_CHECKBOX_BASE && cmd < ID_DEVICE_CHECKBOX_BASE + 20 && state && state->plugin)
+            {
+                int index = cmd - ID_DEVICE_CHECKBOX_BASE;
+                if (index >= 0 && index < (int)state->deviceIds.size() && index < (int)state->deviceCheckboxes.size())
+                {
+                    HWND hCheckbox = state->deviceCheckboxes[index];
+                    bool isChecked = (SendMessageW(hCheckbox, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                    
+                    if (isChecked)
+                    {
+                        // Check how many are currently checked
+                        int checkedCount = 0;
+                        for (HWND hCb : state->deviceCheckboxes) {
+                            if (SendMessageW(hCb, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+                                checkedCount++;
+                            }
+                        }
+                        
+                        // If checking this one makes it 5, revert and warn
+                        if (checkedCount > 4) {
+                            SendMessageW(hCheckbox, BM_SETCHECK, BST_UNCHECKED, 0);
+                            MessageBoxW(hWnd, L"最多只能选择 4 个设备在任务栏中显示。", L"数量限制", MB_ICONWARNING | MB_OK);
+                            return 0; // Do not apply selection
+                        }
+                    }
+
+                    const std::wstring& deviceId = state->deviceIds[index];
+                    state->plugin->SetDeviceSelection(deviceId, isChecked);
+                }
+                return 0;
+            }
+            
             if ((cmd == IDOK || cmd == ID_APPLY_BUTTON) && state && state->hPortEdit && state->hTokenEdit && state->hDeviceSyncEdit && state->hBatteryRefreshEdit)
             {
                 wchar_t portText[32] = {};
@@ -489,6 +700,49 @@ namespace
             }
             break;
         }
+        case WM_APP + 100:
+        {
+            // 延迟重绘设备组，避免在控件创建过程中出现横线
+            if (state && state->hDeviceGroup)
+            {
+                InvalidateRect(state->hDeviceGroup, nullptr, TRUE);
+                UpdateWindow(state->hDeviceGroup);
+            }
+            return 0;
+        }
+        case WM_VSCROLL:
+        {
+            // Handles clicks on the main window's own integrated scrollbar (lParam == 0)
+            if (!state) break;
+            SCROLLINFO si = {};
+            si.cbSize = sizeof(si);
+            si.fMask = SIF_ALL;
+            GetScrollInfo(hWnd, SB_VERT, &si);
+            int yPos = si.nPos;
+            switch (LOWORD(wParam))
+            {
+            case SB_LINEUP:    yPos -= 20; break;
+            case SB_LINEDOWN:  yPos += 20; break;
+            case SB_PAGEUP:    yPos -= (int)si.nPage; break;
+            case SB_PAGEDOWN:  yPos += (int)si.nPage; break;
+            case SB_THUMBTRACK: yPos = HIWORD(wParam); break;
+            case SB_TOP:    yPos = si.nMin; break;
+            case SB_BOTTOM: yPos = (int)(si.nMax - (int)si.nPage); break;
+            }
+            if (yPos < si.nMin) yPos = si.nMin;
+            if (yPos > (int)(si.nMax - (int)si.nPage)) yPos = (int)(si.nMax - (int)si.nPage);
+            state->scrollPos = yPos;
+            LayoutAndScroll(state, hWnd);
+            return 0;
+        }
+        case WM_MOUSEWHEEL:
+        {
+            if (!state) break;
+            short zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+            state->scrollPos += (zDelta > 0) ? -60 : 60;
+            LayoutAndScroll(state, hWnd);
+            return 0;
+        }
         case WM_CLOSE:
             DestroyWindow(hWnd);
             return 0;
@@ -498,6 +752,13 @@ namespace
                 DeleteObject(state->hFont);
                 state->hFont = nullptr;
             }
+            // Clean up device checkboxes
+            for (HWND hCheckbox : state->deviceCheckboxes)
+            {
+                if (hCheckbox) DestroyWindow(hCheckbox);
+            }
+            state->deviceCheckboxes.clear();
+            state->deviceIds.clear();
             return 0;
         default:
             break;
@@ -553,13 +814,14 @@ namespace
         state.resultDeviceSyncSec = currentDeviceSyncSec;
         state.currentBatteryRefreshSec = currentBatteryRefreshSec;
         state.resultBatteryRefreshSec = currentBatteryRefreshSec;
+        state.plugin = &BatteryPlugin::Instance();
 
         if (ownerWindow) EnableWindow(ownerWindow, FALSE);
         HWND hWnd = CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             CLASS_NAME,
-            L"设备电量 插件选项",
-            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
+            L"\u8BBE\u5907\u7535\u91CF \u63D2\u4EF6\u9009\u9879",
+            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN | WS_VSCROLL,
             x, y, DIALOG_WIDTH, DIALOG_HEIGHT,
             ownerWindow, nullptr, GetModuleHandleW(nullptr), &state);
 
@@ -652,6 +914,8 @@ void BatteryPlugin::FetchAndUpdate(bool syncDevices)
         std::lock_guard<std::mutex> lock(m_mutex);
         for (auto& item : m_items)
             item->SetOffline();
+        if (m_displayItem)
+            m_displayItem->SetOffline();
         return;
     }
 
@@ -722,84 +986,52 @@ void BatteryPlugin::FetchAndUpdate(bool syncDevices)
     }
 
     auto devices = ParseBatteryJson(json);
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_authFailCount = 0;
-    m_pluginDisabled = false;
-
-    if (syncDevices)
+    
+    bool needsRebuild = false;
     {
-        for (auto& dev : devices)
-        {
-            std::wstring expectedId = L"Battery_" + dev.id;
-            BatteryItem* matched = nullptr;
-            for (auto& item : m_items)
-            {
-                if (std::wstring(item->GetItemId()) == expectedId)
-                {
-                    matched = item.get();
-                    break;
-                }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_authFailCount = 0;
+        m_pluginDisabled = false;
+        m_availableDevices = devices;
+        
+        if (m_autoSelectFirstDevices && !devices.empty()) {
+            m_autoSelectFirstDevices = false;
+            for (const auto& dev : devices) {
+                if (m_selectedDevices.size() >= 4) break;
+                m_selectedDevices.insert(dev.id);
             }
-            if (matched != nullptr)
-            {
-                matched->Update(dev);
-            }
-            else
-            {
-                auto item = std::make_unique<BatteryItem>();
-                item->Update(dev);
-                m_items.push_back(std::move(item));
-            }
+            needsRebuild = true;
         }
-
-        for (size_t i = 0; i < m_items.size();)
-        {
-            bool found = false;
-            std::wstring itemId = m_items[i]->GetItemId();
-            for (auto& dev : devices)
-            {
-                if (itemId == L"Battery_" + dev.id)
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-                m_items[i]->SetOffline();
-            ++i;
-        }
-
-        for (int i = 0; i < (int)m_items.size(); ++i)
-            m_items[i]->SetIndex(i);
     }
-    else
-    {
-        for (auto& dev : devices)
-        {
-            std::wstring expectedId = L"Battery_" + dev.id;
-            for (auto& item : m_items)
-            {
-                if (std::wstring(item->GetItemId()) == expectedId)
-                {
-                    item->Update(dev);
-                    break;
-                }
-            }
-        }
+    
+    if (needsRebuild) {
+        RebuildItems();
+        SaveConfig();
+    }
 
-        for (auto& item : m_items)
-        {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    // Convert selected set to ordered vector
+    std::vector<std::wstring> orderedIds(m_selectedDevices.begin(), m_selectedDevices.end());
+
+    // Update each m_items up to 4 slots
+    for (size_t i = 0; i < 4 && i < m_items.size(); ++i) {
+        if (i < orderedIds.size()) {
+            const std::wstring& sid = orderedIds[i];
             bool found = false;
-            for (auto& dev : devices)
-            {
-                if (std::wstring(item->GetItemId()) == L"Battery_" + dev.id)
-                {
+            for (const auto& dev : devices) {
+                if (dev.id == sid) {
+                    m_items[i]->Update(dev);
                     found = true;
                     break;
                 }
             }
-            if (!found)
-                item->SetOffline();
+            if (!found) {
+                m_items[i]->SetOffline();
+            }
+        } else {
+            // Unselected slots remain as placeholders
+            m_items[i]->InitWithId(L"");
+            m_items[i]->SetOffline();
         }
     }
 }
@@ -907,6 +1139,14 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
     std::wstring newToken = currentToken;
     int newDeviceSyncSec = currentDeviceSyncSec;
     int newBatteryRefreshSec = currentBatteryRefreshSec;
+    
+    // Track if device selection changed to force restart
+    std::set<std::wstring> oldSelected;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        oldSelected = m_selectedDevices;
+    }
+
     bool accepted = ShowOptionsDialogWindow(reinterpret_cast<HWND>(hParent), currentPort, currentToken, currentDeviceSyncSec, currentBatteryRefreshSec, newPort, newToken, newDeviceSyncSec, newBatteryRefreshSec);
     if (!accepted)
         return OR_OPTION_UNCHANGED;
@@ -926,7 +1166,16 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
         m_lastDeviceSyncTick = 0;
         m_lastBatteryRefreshTick = 0;
     }
+    
+    // Check if the actual selected device set changed
+    bool devicesChanged = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        devicesChanged = (oldSelected != m_selectedDevices);
+    }
+    
     SaveConfig();
+    RebuildItems(); // Rebuild items locally so new devices are allocated
     FetchAndUpdate(true);
     unsigned long long now = GetTickCount64();
     {
@@ -934,6 +1183,12 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
         m_lastDeviceSyncTick = now;
         m_lastBatteryRefreshTick = now;
     }
+    
+    // If the number of items changes or item identities change, TM needs a restart to pick up new GetItem() layout
+    if (devicesChanged) {
+        RestartTrafficMonitor();
+    }
+    
     return OR_OPTION_CHANGED;
 }
 
@@ -1003,6 +1258,38 @@ void BatteryPlugin::LoadConfig()
         m_deviceSyncIntervalMs = deviceSyncSec * 1000;
         m_batteryRefreshIntervalMs = batteryRefreshSec * 1000;
     }
+
+    // Load device selections
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_selectedDevices.clear();
+    }
+    
+    wchar_t selectedDevicesText[2048] = {};
+    GetPrivateProfileStringW(L"devices", L"selected", L"__UNINITIALIZED__", selectedDevicesText, 2048, configPath.c_str());
+    
+    if (wcscmp(selectedDevicesText, L"__UNINITIALIZED__") == 0)
+    {
+        // First run, no selection saved. Auto select later.
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_autoSelectFirstDevices = true;
+    }
+    else if (selectedDevicesText[0] != L'\0')
+    {
+        std::wstringstream ss(selectedDevicesText);
+        std::wstring deviceId;
+        while (std::getline(ss, deviceId, L','))
+        {
+            if (!deviceId.empty())
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_selectedDevices.insert(deviceId);
+            }
+        }
+    }
+    
+    // Config loaded, recreate the item list so GetItem() can report the correct count
+    RebuildItems();
 }
 
 void BatteryPlugin::SaveConfig()
@@ -1015,12 +1302,14 @@ void BatteryPlugin::SaveConfig()
     std::wstring token;
     int deviceSyncSec = 5;
     int batteryRefreshSec = 2;
+    std::set<std::wstring> selectedDevices;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         port = m_apiPort;
         token = m_apiToken;
         deviceSyncSec = m_deviceSyncIntervalMs / 1000;
         batteryRefreshSec = m_batteryRefreshIntervalMs / 1000;
+        selectedDevices = m_selectedDevices;
     }
     wchar_t text[16] = {};
     wsprintfW(text, L"%d", port);
@@ -1033,6 +1322,16 @@ void BatteryPlugin::SaveConfig()
     wsprintfW(refreshText, L"%d", batteryRefreshSec);
     WritePrivateProfileStringW(L"timing", L"device_sync_sec", syncText, configPath.c_str());
     WritePrivateProfileStringW(L"timing", L"battery_refresh_sec", refreshText, configPath.c_str());
+
+    // Save device selections
+    std::wstring selectedDevicesText;
+    for (const auto& deviceId : selectedDevices)
+    {
+        if (!selectedDevicesText.empty())
+            selectedDevicesText += L",";
+        selectedDevicesText += deviceId;
+    }
+    WritePrivateProfileStringW(L"devices", L"selected", selectedDevicesText.c_str(), configPath.c_str());
 }
 
 void BatteryPlugin::UpdateConfigDir(const wchar_t* dir)
@@ -1044,6 +1343,67 @@ void BatteryPlugin::UpdateConfigDir(const wchar_t* dir)
         m_configDir = dir;
     }
     LoadConfig();
+}
+
+void BatteryPlugin::RebuildItems()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
+    // We maintain a stable order by iterating the set up to 4 items
+    std::vector<std::wstring> orderedIds;
+    for (const auto& id : m_selectedDevices) {
+        if (orderedIds.size() >= 4) break;
+        orderedIds.push_back(id);
+    }
+    
+    // Always maintain exactly 4 items
+    while (m_items.size() > 4) {
+        m_items.pop_back();
+    }
+    while (m_items.size() < 4) {
+        auto item = std::make_unique<BatteryItem>();
+        m_items.push_back(std::move(item));
+    }
+    
+    // Bind selected devices to slots, and clear the remaining slots
+    for (size_t i = 0; i < 4; ++i) {
+        m_items[i]->SetIndex((int)i);
+        if (i < orderedIds.size()) {
+            m_items[i]->InitWithId(orderedIds[i]); 
+        } else {
+            // Clear unselected slots
+            m_items[i]->InitWithId(L"");
+            m_items[i]->SetOffline(); // Forces empty display state
+        }
+    }
+}
+
+std::vector<DeviceBattery> BatteryPlugin::GetAvailableDevices() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_availableDevices;
+}
+
+void BatteryPlugin::SetDeviceSelection(const std::wstring& deviceId, bool selected)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (selected)
+        m_selectedDevices.insert(deviceId);
+    else
+        m_selectedDevices.erase(deviceId);
+}
+
+bool BatteryPlugin::IsDeviceSelected(const std::wstring& deviceId) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_selectedDevices.count(deviceId) > 0;
+}
+
+void BatteryPlugin::RefreshDevicesNow()
+{
+    // Makes a blocking HTTP request to get the latest device list.
+    // Called from the dialog UI thread when the user clicks the Refresh button.
+    FetchAndUpdate(true);
 }
 
 ITMPlugin* TMPluginGetInstance()

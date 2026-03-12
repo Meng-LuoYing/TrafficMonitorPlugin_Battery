@@ -5,6 +5,7 @@
 #endif
 
 #include <windows.h>
+#include <commctrl.h>
 #include <winhttp.h>
 #include <string>
 #include <vector>

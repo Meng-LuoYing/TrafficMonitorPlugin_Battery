@@ -22,8 +22,8 @@ target_include_directories(BatteryPlugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# 链接 WinHTTP
-target_link_libraries(BatteryPlugin PRIVATE winhttp)
+# 链接 WinHTTP 和 ComCtl32 (for SetWindowSubclass)
+target_link_libraries(BatteryPlugin PRIVATE winhttp comctl32)
 
 # Unicode 支持
 target_compile_definitions(BatteryPlugin PRIVATE

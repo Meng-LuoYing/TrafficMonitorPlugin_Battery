@@ -8,14 +8,23 @@ BatteryItem::BatteryItem()
 void BatteryItem::Update(const DeviceBattery& dev)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_name       = dev.name;
-    m_battery    = dev.battery;
-    m_isCharging = dev.isCharging;
-    m_isOnline   = dev.isOnline;
-
-    // Build a stable unique ID from the device hardware ID
+    m_name = dev.name;
+    
+    // For single device update, replace the selected devices with just this device
+    m_selectedDevices.clear();
+    m_selectedDevices.push_back(dev);
+    m_isOnline = dev.isOnline;
     m_itemId = L"Battery_" + dev.id;
 
+    RebuildText();
+}
+
+void BatteryItem::UpdateSelectedDevices(const std::vector<DeviceBattery>& devices)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_selectedDevices = devices;
+    m_isOnline = !devices.empty();
+    m_itemId = L"Battery_Display";
     RebuildText();
 }
 
@@ -23,39 +32,72 @@ void BatteryItem::SetOffline()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_isOnline = false;
+    for (auto& dev : m_selectedDevices)
+    {
+        dev.isOnline = false;
+    }
+    RebuildText();
+}
+
+void BatteryItem::InitWithId(const std::wstring& id)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_itemId = L"Battery_" + id;
+    m_name = id;
+    
+    m_selectedDevices.clear();
+    DeviceBattery fakeDev;
+    fakeDev.id = id;
+    fakeDev.name = id; // Temporary name is just the ID
+    fakeDev.isOnline = false;
+    fakeDev.battery = -1;
+    m_selectedDevices.push_back(fakeDev);
+    
     RebuildText();
 }
 
 void BatteryItem::RebuildText()
 {
-    // Label: device name (truncate to 12 chars)
-    std::wstring shortName = m_name;
-    if (shortName.size() > 12)
-        shortName = shortName.substr(0, 11) + L"\u2026"; // ellipsis
+    // 1-based index for display (slot 1 to 4)
+    int displayIndex = m_index + 1;
 
-    m_labelText = shortName;
-
-    // Value: e.g.  "[bolt] 85%"  or  "[battery] 85%"  or  "--"
-    wchar_t buf[64];
-    if (!m_isOnline || m_battery < 0)
+    // If no device is selected or valid
+    if (m_selectedDevices.empty())
     {
-        swprintf_s(buf, L"--");
+        m_valueText = L"--";
+        return;
     }
-    else if (m_isCharging)
+
+    const auto& dev = m_selectedDevices[0];
+    
+    std::wstring displayName = dev.name;
+    if (displayName.length() > 12)
     {
-        swprintf_s(buf, L"\u26a1 %d%%", m_battery);   // lightning bolt
+        displayName = displayName.substr(0, 9) + L"...";
+    }
+
+    // Value text is "设备名称 电池图标 电量"
+    wchar_t buf[256];
+    if (!dev.isOnline || dev.battery < 0)
+    {
+        swprintf_s(buf, L"%s --", displayName.c_str());
+    }
+    else if (dev.isCharging)
+    {
+        swprintf_s(buf, L"%s \u26A1 %d%%", displayName.c_str(), dev.battery); // Lightning bolt
     }
     else
     {
-        swprintf_s(buf, L"\U0001F50B %d%%", m_battery); // battery emoji
+        swprintf_s(buf, L"%s \U0001F50B %d%%", displayName.c_str(), dev.battery); // Battery icon
     }
     m_valueText = buf;
 }
 
 const wchar_t* BatteryItem::GetItemName() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_name.empty() ? L"Battery" : m_name.c_str();
+    static const wchar_t* names[] = { L"设备1：", L"设备2：", L"设备3：", L"设备4：" };
+    if (m_index >= 0 && m_index < 4) return names[m_index];
+    return L"未知";
 }
 
 const wchar_t* BatteryItem::GetItemId() const
@@ -72,8 +114,7 @@ const wchar_t* BatteryItem::GetItemId() const
 
 const wchar_t* BatteryItem::GetItemLableText() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_labelText.empty() ? L"Battery" : m_labelText.c_str();
+    return L" ";
 }
 
 const wchar_t* BatteryItem::GetItemValueText() const
@@ -84,7 +125,10 @@ const wchar_t* BatteryItem::GetItemValueText() const
 
 const wchar_t* BatteryItem::GetItemValueSampleText() const
 {
-    return L"\u26a1 100%";  // used by TrafficMonitor to measure column width
+    std::lock_guard<std::mutex> lock(m_mutex);
+    // Return a moderately wide string to reserve column width.
+    // Making this too long causes large gaps between items.
+    return L"12345678901 \U0001F50B 100%";
 }
 
 int BatteryItem::IsDrawResourceUsageGraph() const
@@ -95,6 +139,8 @@ int BatteryItem::IsDrawResourceUsageGraph() const
 float BatteryItem::GetResourceUsageGraphValue() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_battery < 0) return 0.0f;
-    return m_battery / 100.0f;
+    if (m_selectedDevices.empty()) return 0.0f;
+    const auto& dev = m_selectedDevices[0];
+    if (dev.battery < 0) return 0.0f;
+    return dev.battery / 100.0f;
 }

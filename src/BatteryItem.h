@@ -12,8 +12,12 @@ public:
 
     // Called by BatteryPlugin to push fresh device data
     void Update(const DeviceBattery& dev);
+    // Update with multiple selected devices
+    void UpdateSelectedDevices(const std::vector<DeviceBattery>& devices);
     // Mark device as offline (no longer in API response)
     void SetOffline();
+    // Pre-initialize item with ID from config before API data is available
+    void InitWithId(const std::wstring& id);
     // Set slot index (used to generate a stable unique ID)
     void SetIndex(int idx) { m_index = idx; }
 
@@ -31,10 +35,9 @@ private:
     mutable std::wstring m_labelText;
     mutable std::wstring m_valueText;
     mutable std::wstring m_itemId;
-    int  m_battery   = -1;
-    bool m_isCharging = false;
-    bool m_isOnline   = false;
-    int  m_index      = 0;
+    std::vector<DeviceBattery> m_selectedDevices;
+    bool m_isOnline = false;
+    int  m_index = 0;
 
     mutable std::mutex m_mutex;
 
