@@ -6,8 +6,10 @@
 #include <shellapi.h>
 #include <sstream>
 
+// 选项对话框相关的匿名命名空间
 namespace
 {
+    // 选项对话框状态结构
     struct OptionsDialogState
     {
         int currentPort = 18080;
@@ -39,10 +41,11 @@ namespace
         std::vector<HWND> deviceCheckboxes;
         std::vector<std::wstring> deviceIds;
         BatteryPlugin* plugin = nullptr;
-        int scrollPos = 0;      // current vertical scroll position (pixels)
-        int totalContentH = 0;  // total virtual content height (pixels)
+        int scrollPos = 0;      // 当前垂直滚动位置（像素）
+        int totalContentH = 0;  // 总虚拟内容高度（像素）
     };
 
+    // 控件 ID 常量定义
     constexpr int ID_PORT_EDIT = 1001;
     constexpr int ID_TOKEN_EDIT = 1002;
     constexpr int ID_DEVICE_SYNC_EDIT = 1003;
@@ -54,6 +57,7 @@ namespace
     constexpr int DIALOG_WIDTH = 600;
     constexpr int DIALOG_HEIGHT = 560;
 
+    // 尝试解析整数文本
     bool TryParseInteger(const wchar_t* text, int minValue, int maxValue, int& out)
     {
         if (text == nullptr || text[0] == L'\0')

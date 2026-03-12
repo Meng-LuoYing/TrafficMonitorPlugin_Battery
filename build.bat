@@ -14,7 +14,7 @@ cmake ..
 
 :: 检查 cmake 是否成功
 if %errorlevel% neq 0 (
-    echo CMake generation failed!
+    echo CMake 生成失败!
     exit /b %errorlevel%
 )
 
@@ -23,9 +23,9 @@ cmake --build . --config Release
 
 :: 检查构建是否成功
 if %errorlevel% neq 0 (
-    echo Build failed!
+    echo 构建失败!
     exit /b %errorlevel%
 )
 
-echo Build successful!
+echo 构建成功!
 endlocal

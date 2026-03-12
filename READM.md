@@ -1,9 +1,8 @@
-# TrafficMonitor Battery Plugin
+# TrafficMonitor 电池插件
 
-这是一个适配 TrafficMonitor 插件接口 API v7 的设备电量插件。  
-插件会定时请求本地接口 `http://127.0.0.1:18080/api/v1/status`，解析设备列表并在 TrafficMonitor 中显示每个设备的电量状态。
+这是一个适配 TrafficMonitor 插件接口 API v7 的设备电量插件。插件会定时请求本地接口 `http://127.0.0.1:18080/api/v1/status`，解析设备列表并在 TrafficMonitor 中显示每个设备的电量状态。
 
-## 当前项目结构
+## 项目结构
 
 - `include/PluginInterface.h`：TrafficMonitor 插件接口定义（API v7）
 - `src/BatteryPlugin.cpp`：插件主逻辑，拉取数据并分发到各个显示项
@@ -41,14 +40,7 @@ JSON 中会从 `devices` 数组提取设备信息，主要字段包括：
 build.bat
 ```
 
-脚本会执行：
-
-```bat
-cmake ..
-cmake --build . --config Release
-```
-
-默认输出位于 `build/Release/BatteryPlugin.dll`（多配置生成器）或 `build/BatteryPlugin.dll`（单配置生成器）。
+默认输出位于 `build/Release/BatteryPlugin.dll`。
 
 ### 方法二：手动 CMake
 

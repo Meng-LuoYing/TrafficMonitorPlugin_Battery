@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 project(BatteryPlugin LANGUAGES CXX)
 
+# 设置 C++ 标准
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 源文件
+# 源文件列表
 set(SOURCES
     src/dllmain.cpp
     src/HttpClient.cpp
@@ -22,7 +23,7 @@ target_include_directories(BatteryPlugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# 链接 WinHTTP 和 ComCtl32 (for SetWindowSubclass)
+# 链接 WinHTTP 和 ComCtl32 (用于 SetWindowSubclass)
 target_link_libraries(BatteryPlugin PRIVATE winhttp comctl32)
 
 # Unicode 支持
