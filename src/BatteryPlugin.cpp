@@ -122,6 +122,60 @@ namespace
         return DefSubclassProc(hWnd, msg, wParam, lParam);
     }
 
+    LRESULT CALLBACK DeviceListSubclassProc(
+        HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam,
+        UINT_PTR uIdSubclass, DWORD_PTR /*dwRefData*/)
+    {
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK)
+        {
+            int checkedCount = 0;
+            int count = ListView_GetItemCount(hWnd);
+            for (int i = 0; i < count; ++i)
+                if (ListView_GetCheckState(hWnd, i))
+                    checkedCount++;
+
+            if (checkedCount >= 4)
+            {
+                LVHITTESTINFO hti = {};
+                hti.pt.x = (short)LOWORD(lParam);
+                hti.pt.y = (short)HIWORD(lParam);
+                ListView_HitTest(hWnd, &hti);
+                
+                if (hti.flags & LVHT_ONITEMSTATEICON)
+                {
+                    if (hti.iItem >= 0 && hti.iItem < count) {
+                        if (!ListView_GetCheckState(hWnd, hti.iItem)) {
+                            return 0; // block click
+                        }
+                    }
+                }
+            }
+        }
+        else if (msg == WM_KEYDOWN && wParam == VK_SPACE)
+        {
+            int checkedCount = 0;
+            int count = ListView_GetItemCount(hWnd);
+            for (int i = 0; i < count; ++i)
+                if (ListView_GetCheckState(hWnd, i))
+                    checkedCount++;
+
+            if (checkedCount >= 4)
+            {
+                int targetItem = ListView_GetNextItem(hWnd, -1, LVNI_FOCUSED);
+                if (targetItem >= 0 && targetItem < count) {
+                    if (!ListView_GetCheckState(hWnd, targetItem)) {
+                        return 0; // block spacebar
+                    }
+                }
+            }
+        }
+        else if (msg == WM_NCDESTROY)
+        {
+            RemoveWindowSubclass(hWnd, DeviceListSubclassProc, uIdSubclass);
+        }
+        return DefSubclassProc(hWnd, msg, wParam, lParam);
+    }
+
     void RefreshDeviceList(OptionsDialogState* state, HWND hDialog)
     {
         if (!state || !state->plugin || !hDialog || !state->hDeviceList) return;
@@ -546,7 +600,7 @@ namespace
                 WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 16, 16, 500, 122, hWnd, nullptr, nullptr, nullptr);
             state->hTimingGroup = CreateWindowW(L"BUTTON", L"\u5237\u65B0\u8BBE\u7F6E",
                 WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 16, 148, 500, 124, hWnd, nullptr, nullptr, nullptr);
-            state->hDeviceGroup = CreateWindowW(L"BUTTON", L"\u8BBE\u5907\u663E\u793A\u9009\u62E9",
+            state->hDeviceGroup = CreateWindowW(L"BUTTON", L"\u8BBE\u5907\u5217\u8868\uFF08\u6700\u591A\u53EA\u80FD\u9009\u62E94\u53F0\u8BBE\u5907\uFF09",
                 WS_CHILD | WS_VISIBLE | BS_GROUPBOX | WS_CLIPCHILDREN, 16, 282, 500, 100, hWnd, nullptr, nullptr, nullptr);
 
             // Labels
@@ -639,6 +693,9 @@ namespace
 
             // Subclass hDeviceGroup to forward WM_COMMAND to hWnd and provide white background
             SetWindowSubclass(state->hDeviceGroup, DeviceGroupSubclassProc, 1, 0);
+            
+            // Subclass hDeviceList to intercept clicks
+            SetWindowSubclass(state->hDeviceList, DeviceListSubclassProc, 1, 0);
             return 0;
         }
         case WM_SIZE:
@@ -665,34 +722,43 @@ namespace
 
             if (pnm->hwndFrom == state->hDeviceList && pnm->code == LVN_ITEMCHANGED)
             {
-                if (state->bCheckingLimits) return 0;
-
                 auto pnmv = reinterpret_cast<LPNMLISTVIEW>(lParam);
-                // Check if the state image (checkbox) changed
                 if ((pnmv->uChanged & LVIF_STATE) && 
                     (pnmv->uNewState & LVIS_STATEIMAGEMASK) != (pnmv->uOldState & LVIS_STATEIMAGEMASK))
                 {
-                    bool isChecked = ((pnmv->uNewState & LVIS_STATEIMAGEMASK) >> 12) == 2;
-                    if (isChecked)
-                    {
-                        // Enforce max 4 devices limit
-                        int checkedCount = 0;
-                        int count = ListView_GetItemCount(state->hDeviceList);
-                        for (int i = 0; i < count; ++i)
-                        {
-                            if (ListView_GetCheckState(state->hDeviceList, i))
-                                checkedCount++;
-                        }
-                        if (checkedCount > 4)
-                        {
-                            state->bCheckingLimits = true;
-                            ListView_SetCheckState(state->hDeviceList, pnmv->iItem, FALSE);
-                            state->bCheckingLimits = false;
-                            
-                            MessageBoxW(hWnd, L"最多只能选择 4 个设备在任务栏中显示。", L"数量限制", MB_ICONWARNING | MB_OK);
-                        }
-                    }
+                    // Forces full redraw to update the gray text over items
+                    InvalidateRect(state->hDeviceList, nullptr, FALSE);
                 }
+                return 0;
+            }
+
+            if (pnm->hwndFrom == state->hDeviceList && pnm->code == NM_CUSTOMDRAW)
+            {
+                auto pLVCD = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
+                switch (pLVCD->nmcd.dwDrawStage)
+                {
+                case CDDS_PREPAINT:
+                    SetWindowLongPtr(hWnd, DWLP_MSGRESULT, CDRF_NOTIFYITEMDRAW);
+                    return CDRF_NOTIFYITEMDRAW;
+                case CDDS_ITEMPREPAINT:
+                {
+                    int checkedCount = 0;
+                    int count = ListView_GetItemCount(state->hDeviceList);
+                    for (int i = 0; i < count; ++i)
+                        if (ListView_GetCheckState(state->hDeviceList, i))
+                            checkedCount++;
+
+                    bool isChecked = ListView_GetCheckState(state->hDeviceList, pLVCD->nmcd.dwItemSpec);
+                    if (!isChecked && checkedCount >= 4)
+                    {
+                        // Dim the text to show it's disabled
+                        pLVCD->clrText = GetSysColor(COLOR_GRAYTEXT);
+                    }
+                    SetWindowLongPtr(hWnd, DWLP_MSGRESULT, CDRF_DODEFAULT);
+                    return CDRF_DODEFAULT;
+                }
+                }
+                return 0;
             }
             return 0;
         }
