@@ -47,6 +47,7 @@ namespace
         BatteryPlugin* plugin = nullptr;
         int scrollPos = 0;      // 当前垂直滚动位置（像素）
         int totalContentH = 0;  // 总虚拟内容高度（像素）
+        bool bCheckingLimits = false; // Prevents recursive checkbox checks
     };
 
     // 控件 ID 常量定义
@@ -61,7 +62,7 @@ namespace
     constexpr int ID_MOVE_DOWN_BUTTON = 1104;
     constexpr int ID_DEVICE_CHECKBOX_BASE = 2000;
     constexpr int ID_DEVICE_LIST = 2001;
-    constexpr int DIALOG_WIDTH = 480;
+    constexpr int DIALOG_WIDTH = 380;
     constexpr int DIALOG_HEIGHT = 560;
 
     // 尝试解析整数文本
@@ -238,22 +239,22 @@ namespace
 
         int sp = state->scrollPos;
         int labelLeft = margin + 16;
-        int valueLeft = 290;
+        int valueLeft = 230;
         int valueW    = groupW - (valueLeft - margin) - 20;
-        if (valueW < 100) valueW = 100;
+        if (valueW < 80) valueW = 80;
 
         // Network group + controls
         SetWindowPos(state->hNetworkGroup,      nullptr, margin, networkVirtTop - sp, groupW, networkH, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hPortLabel,         nullptr, labelLeft, networkVirtTop + 26 - sp, 130, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hPortLabel,         nullptr, labelLeft, networkVirtTop + 26 - sp, 190, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(state->hPortEdit,          nullptr, valueLeft, networkVirtTop + 22 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hTokenLabel,        nullptr, labelLeft, networkVirtTop + 70 - sp, 130, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hTokenLabel,        nullptr, labelLeft, networkVirtTop + 70 - sp, 190, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(state->hTokenEdit,         nullptr, valueLeft, networkVirtTop + 66 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Timing group + controls
         SetWindowPos(state->hTimingGroup,        nullptr, margin, timingVirtTop - sp, groupW, timingH, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hDeviceSyncLabel,    nullptr, labelLeft, timingVirtTop + 26 - sp, 260, 20, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hDeviceSyncLabel,    nullptr, labelLeft, timingVirtTop + 26 - sp, 190, 20, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(state->hDeviceSyncEdit,     nullptr, valueLeft, timingVirtTop + 22 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hBatteryRefreshLabel,nullptr, labelLeft, timingVirtTop + 70 - sp, 260, 20, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hBatteryRefreshLabel,nullptr, labelLeft, timingVirtTop + 70 - sp, 190, 20, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(state->hBatteryRefreshEdit, nullptr, valueLeft, timingVirtTop + 66 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Device group: resize with SWP_FRAMECHANGED so the groupbox border is redrawn correctly
@@ -273,6 +274,7 @@ namespace
         {
             int listW = groupW - 100;
             SetWindowPos(state->hDeviceList, nullptr, 16, 20, listW, deviceH - 32, SWP_NOZORDER | SWP_NOACTIVATE);
+            ListView_SetColumnWidth(state->hDeviceList, 0, listW - 25);
         }
 
         // Fixed button bar
@@ -663,6 +665,8 @@ namespace
 
             if (pnm->hwndFrom == state->hDeviceList && pnm->code == LVN_ITEMCHANGED)
             {
+                if (state->bCheckingLimits) return 0;
+
                 auto pnmv = reinterpret_cast<LPNMLISTVIEW>(lParam);
                 // Check if the state image (checkbox) changed
                 if ((pnmv->uChanged & LVIF_STATE) && 
@@ -681,7 +685,10 @@ namespace
                         }
                         if (checkedCount > 4)
                         {
+                            state->bCheckingLimits = true;
                             ListView_SetCheckState(state->hDeviceList, pnmv->iItem, FALSE);
+                            state->bCheckingLimits = false;
+                            
                             MessageBoxW(hWnd, L"最多只能选择 4 个设备在任务栏中显示。", L"数量限制", MB_ICONWARNING | MB_OK);
                         }
                     }
