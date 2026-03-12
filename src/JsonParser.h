@@ -2,15 +2,15 @@
 #include <string>
 #include <vector>
 
-// Information for a single BLE device
+// 单个 BLE 设备的信息结构
 struct DeviceBattery
 {
-    std::wstring id;
-    std::wstring name;      // renamedName preferred; falls back to name
-    int battery = -1;       // -1 = unknown
-    bool isCharging = false;
-    bool isOnline = false;
+    std::wstring id;           // 设备ID
+    std::wstring name;         // 设备名称（优先使用 renamedName，回退到 name）
+    int battery = -1;          // 电量值，-1 表示未知
+    bool isCharging = false;  // 是否正在充电
+    bool isOnline = false;     // 是否在线
 };
 
-// Parse the /api/v1/status JSON response and return all device entries
+// 解析 /api/v1/status JSON 响应并返回所有设备条目
 std::vector<DeviceBattery> ParseBatteryJson(const std::string& json);

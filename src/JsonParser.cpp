@@ -2,11 +2,11 @@
 #include "JsonParser.h"
 
 // ---------------------------------------------------------------
-// Minimal JSON helpers for this specific API shape (no 3rd-party deps)
+// 针对此特定 API 形状的最小化 JSON 辅助函数（无第三方依赖）
 // ---------------------------------------------------------------
 
-// Extract "key": "string-value" from a JSON fragment.
-// Returns UTF-8 encoded std::string, or "" when absent / null.
+// 从 JSON 片段中提取 "key": "string-value"
+// 返回 UTF-8 编码的 std::string，不存在或为 null 时返回空字符串
 static std::string ExtractStringValue(const std::string& json, const std::string& key, size_t start = 0)
 {
     std::string search = "\"" + key + "\"";
@@ -92,7 +92,8 @@ static std::string ExtractStringValue(const std::string& json, const std::string
     return "";
 }
 
-// Extract "key": <integer> from a JSON fragment. Returns defVal on failure.
+// 从 JSON 片段中提取 "key": <integer>
+// 失败时返回 defVal
 static int ExtractIntValue(const std::string& json, const std::string& key, size_t start, int defVal = -1)
 {
     std::string search = "\"" + key + "\"";
@@ -114,7 +115,7 @@ static int ExtractIntValue(const std::string& json, const std::string& key, size
     return val;
 }
 
-// Extract "key": true/false from a JSON fragment.
+// 从 JSON 片段中提取 "key": true/false
 static bool ExtractBoolValue(const std::string& json, const std::string& key, size_t start)
 {
     std::string search = "\"" + key + "\"";
@@ -131,7 +132,7 @@ static bool ExtractBoolValue(const std::string& json, const std::string& key, si
     return json.substr(pos, 4) == "true";
 }
 
-// Convert UTF-8 std::string -> std::wstring using Windows API
+// 使用 Windows API 将 UTF-8 std::string 转换为 std::wstring
 static std::wstring Utf8ToWide(const std::string& str)
 {
     if (str.empty()) return {};
@@ -143,13 +144,13 @@ static std::wstring Utf8ToWide(const std::string& str)
 }
 
 // ---------------------------------------------------------------
-// Main parser: iterate over each {} object in data.devices array
+// 主解析器：遍历 data.devices 数组中的每个 {} 对象
 // ---------------------------------------------------------------
 std::vector<DeviceBattery> ParseBatteryJson(const std::string& json)
 {
     std::vector<DeviceBattery> result;
 
-    // Locate the "devices" array
+    // 定位 "devices" 数组
     size_t arrStart = json.find("\"devices\"");
     if (arrStart == std::string::npos) return result;
 
@@ -163,7 +164,7 @@ std::vector<DeviceBattery> ParseBatteryJson(const std::string& json)
         size_t objStart = json.find('{', pos);
         if (objStart == std::string::npos) break;
 
-        // Find matching closing brace (brace-count; safe for this flat JSON)
+        // 查找匹配的右大括号（括号计数法；对此扁平 JSON 安全）
         int depth = 1;
         size_t objEnd = objStart + 1;
         while (objEnd < json.size() && depth > 0)
@@ -197,7 +198,7 @@ std::vector<DeviceBattery> ParseBatteryJson(const std::string& json)
             continue;
         }
 
-        // renamedName takes priority over name
+        // renamedName 优先于 name
         std::string renamedName = ExtractStringValue(obj, "renamedName");
         bool hasRenamedName = false;
         for (char ch : renamedName)

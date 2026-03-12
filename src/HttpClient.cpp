@@ -2,10 +2,12 @@
 #include "HttpClient.h"
 #include <winhttp.h>
 
+// HTTP GET 请求实现
 std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, const wchar_t* token, int timeout_ms)
 {
     std::string result;
 
+    // 创建 WinHTTP 会话
     HINTERNET hSession = WinHttpOpen(
         L"BatteryPlugin/1.0",
         WINHTTP_ACCESS_TYPE_NO_PROXY,
@@ -15,6 +17,7 @@ std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, const wc
     if (!hSession)
         return result;
 
+    // 连接到服务器
     HINTERNET hConnect = WinHttpConnect(hSession, host, (INTERNET_PORT)port, 0);
     if (!hConnect)
     {
@@ -22,6 +25,7 @@ std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, const wc
         return result;
     }
 
+    // 创建请求句柄
     HINTERNET hRequest = WinHttpOpenRequest(
         hConnect,
         L"GET",
@@ -40,6 +44,7 @@ std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, const wc
     // 设置超时
     WinHttpSetTimeouts(hRequest, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
 
+    // 构建请求头
     std::wstring headers;
     if (token != nullptr && token[0] != L'\0')
     {
@@ -48,6 +53,7 @@ std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, const wc
         headers += L"\r\n";
     }
 
+    // 发送请求
     BOOL bSent = WinHttpSendRequest(
         hRequest,
         headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
@@ -56,6 +62,7 @@ std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, const wc
 
     if (bSent)
     {
+        // 接收响应
         if (WinHttpReceiveResponse(hRequest, nullptr))
         {
             DWORD dwSize = 0;
@@ -77,6 +84,7 @@ std::string HttpGet(const wchar_t* host, int port, const wchar_t* path, const wc
         }
     }
 
+    // 清理资源
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
