@@ -57,10 +57,12 @@ private:
     bool m_autoSelectFirstDevices = false;              // 是否自动选择前几个设备
     ITrafficMonitor* m_pApp = nullptr;                 // TrafficMonitor 应用指针
     int m_apiPort = 18080;                              // API 端口
+public:
     std::wstring m_apiToken;                            // API 令牌
     int m_authFailCount = 0;                            // 鉴权失败次数
     bool m_pluginDisabled = false;                       // 插件是否被禁用
     bool m_stopApiRequests = false;                      // 是否停止API请求（鉴权失败后）
+    bool m_optionsDialogOpening = false;                 // 选项对话框是否正在打开
     int m_refreshIntervalMs = 2000;                      // 数据刷新间隔（毫秒）
     unsigned long long m_lastRefreshTick = 0;           // 上次数据刷新时间
     std::wstring m_configDir;                            // 配置目录

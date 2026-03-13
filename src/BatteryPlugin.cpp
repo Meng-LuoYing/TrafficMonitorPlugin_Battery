@@ -65,11 +65,19 @@ namespace
     // 尝试解析整数文本
     bool TryParseInteger(const wchar_t* text, int minValue, int maxValue, int& out)
     {
-        if (text == nullptr || text[0] == L'\0')
-            return false;
+        if (text == nullptr) return false;
+        // Trim leading spaces
+        while (*text == L' ') text++;
+        if (text[0] == L'\0') return false;
+        
         wchar_t* end = nullptr;
         long value = wcstol(text, &end, 10);
-        if (end == text || *end != L'\0' || value < minValue || value > maxValue)
+        if (end == text) return false;
+        
+        // Trim trailing spaces
+        while (*end == L' ') end++;
+        
+        if (*end != L'\0' || value < minValue || value > maxValue)
             return false;
         out = static_cast<int>(value);
         return true;
@@ -403,7 +411,11 @@ namespace
         if (!hasShownAlert) {
             // 使用简单的MessageBox，但在新线程中显示以避免阻塞
             std::thread([parent]() {
-                MessageBoxW(parent, L"鉴权失败，请在插件设置中填写 Token！", L"设备电量鉴权", MB_OK | MB_ICONWARNING);
+                if (!BatteryPlugin::Instance().m_optionsDialogOpening) {
+                    MessageBoxW(parent, L"鉴权失败，请在插件设置中填写 Token！", L"设备电量鉴权", MB_OK | MB_ICONWARNING);
+                } else {
+                    MessageBoxW(parent, L"鉴权失败，请检查 Token 是否正确。", L"设备电量鉴权", MB_OK | MB_ICONWARNING);
+                }
             }).detach();
             
             hasShownAlert = true;
@@ -627,21 +639,35 @@ namespace
                 // 获取当前输入框中的Token和端口值
                 wchar_t tokenText[512] = {};
                 wchar_t portText[32] = {};
+                wchar_t refreshText[32] = {};
                 GetWindowTextW(state->hTokenEdit, tokenText, 511);
                 GetWindowTextW(state->hPortEdit, portText, 31);
-                std::wstring currentToken = tokenText;
+                GetWindowTextW(state->hRefreshEdit, refreshText, 31);
+
+                // 先行验证端口和刷新间隔，避免无效请求
+                int port = 0;
+                if (!TryParseInteger(portText, 1, 65535, port)) {
+                    MessageBoxW(hWnd, L"端口必须是 1 到 65535 之间的整数。", L"设备电量", MB_OK | MB_ICONWARNING);
+                    SetFocus(state->hPortEdit);
+                    SendMessageW(state->hPortEdit, EM_SETSEL, 0, -1);
+                    return 0;
+                }
                 
-                // 解析端口
-                int currentPort = 18080;
-                TryParseInteger(portText, 1, 65535, currentPort);
-                
-                // 临时更新插件中的Token和端口用于这次请求
-                state->plugin->SetApiToken(currentToken);
-                state->plugin->SetApiPort(currentPort);
+                int refreshSec = 0;
+                if (!TryParseInteger(refreshText, 1, 3600, refreshSec)) {
+                    MessageBoxW(hWnd, L"刷新间隔必须是 1 到 3600 之间的整数秒。", L"设备电量", MB_OK | MB_ICONWARNING);
+                    SetFocus(state->hRefreshEdit);
+                    SendMessageW(state->hRefreshEdit, EM_SETSEL, 0, -1);
+                    return 0;
+                }
+
+                // 临时更新插件中的配置用于这次请求
+                state->plugin->SetApiToken(tokenText);
+                state->plugin->SetApiPort(port);
                 
                 // Force a live API fetch first, then update the checkbox list
                 state->plugin->RefreshDevicesNow();
-                // 刷新设备列表显示（包括自动勾选）
+                // 刷新设备列表显示
                 RefreshDeviceList(state, hWnd);
                 return 0;
             }
@@ -896,6 +922,12 @@ namespace
         state.plugin = &BatteryPlugin::Instance();
 
         if (ownerWindow) EnableWindow(ownerWindow, FALSE);
+        
+        {
+            std::lock_guard<std::mutex> lock(state.plugin->m_mutex);
+            state.plugin->m_optionsDialogOpening = true;
+        }
+
         HWND hWnd = CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             CLASS_NAME,
@@ -907,6 +939,8 @@ namespace
         if (!hWnd)
         {
             if (ownerWindow) EnableWindow(ownerWindow, TRUE);
+            std::lock_guard<std::mutex> lock(state.plugin->m_mutex);
+            state.plugin->m_optionsDialogOpening = false;
             return false;
         }
 
@@ -932,6 +966,14 @@ namespace
 
         if (ret == 0)
             PostQuitMessage(static_cast<int>(msg.wParam));
+
+        if (ownerWindow) EnableWindow(ownerWindow, TRUE);
+        if (ownerWindow) SetForegroundWindow(ownerWindow);
+
+        {
+            std::lock_guard<std::mutex> lock(state.plugin->m_mutex);
+            state.plugin->m_optionsDialogOpening = false;
+        }
 
         if (state.accepted)
         {
@@ -1022,7 +1064,19 @@ void BatteryPlugin::FetchAndUpdate()
         }
 
         // 鉴权失败，显示提示框（只弹出一次），但插件继续运行
-        PromptTokenDialog(nullptr, token, failCount, token);
+        bool dialogOpening = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            dialogOpening = m_optionsDialogOpening;
+        }
+
+        if (dialogOpening) {
+            std::thread([]() {
+                MessageBoxW(nullptr, L"鉴权失败：Token 错误或已过期。", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+            }).detach();
+        } else {
+            PromptTokenDialog(nullptr, token, failCount, token);
+        }
         return;
     }
 
@@ -1044,41 +1098,20 @@ void BatteryPlugin::FetchAndUpdate()
             m_autoSelectFirstDevices = false;
             for (const auto& dev : devices) {
                 if (m_selectedDevices.size() >= 4) break;
-                m_selectedDevices.push_back(dev.id);
+                // 去重校验
+                if (std::find(m_selectedDevices.begin(), m_selectedDevices.end(), dev.id) == m_selectedDevices.end()) {
+                    m_selectedDevices.push_back(dev.id);
+                }
             }
             needsRebuild = true;
         }
     }
     
+    // 无论是否需要重建列表（如自动勾选），每次获取新数据后都重新构建项以更新电量等状态
+    RebuildItems();
+    
     if (needsRebuild) {
-        RebuildItems();
         SaveConfig();
-    }
-
-    std::lock_guard<std::mutex> lock(m_mutex);
-    // Convert selected set to ordered vector
-    std::vector<std::wstring> orderedIds(m_selectedDevices.begin(), m_selectedDevices.end());
-
-    // Update each m_items up to 4 slots
-    for (size_t i = 0; i < 4 && i < m_items.size(); ++i) {
-        if (i < orderedIds.size()) {
-            const std::wstring& sid = orderedIds[i];
-            bool found = false;
-            for (const auto& dev : devices) {
-                if (dev.id == sid) {
-                    m_items[i]->Update(dev);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                m_items[i]->SetOffline();
-            }
-        } else {
-            // Unselected slots remain as placeholders
-            m_items[i]->InitWithId(L"");
-            m_items[i]->SetOffline();
-        }
     }
 }
 
@@ -1099,6 +1132,13 @@ void BatteryPlugin::DataRequired()
         InitDevices();
     else
     {
+        bool dialogOpening = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            dialogOpening = m_optionsDialogOpening;
+        }
+        if (dialogOpening) return; // 对话框打开期间停止后台自动刷新
+
         unsigned long long now = GetTickCount64();
         bool needRefresh = false;
         {
@@ -1317,7 +1357,10 @@ void BatteryPlugin::LoadConfig()
         {
             if (!deviceId.empty())
             {
-                m_selectedDevices.push_back(deviceId);
+                if (std::find(m_selectedDevices.begin(), m_selectedDevices.end(), deviceId) == m_selectedDevices.end())
+                {
+                    m_selectedDevices.push_back(deviceId);
+                }
             }
         }
     }
@@ -1378,11 +1421,24 @@ void BatteryPlugin::RebuildItems()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     
-    // We maintain a stable order by iterating the set up to 4 items
+    // We maintain a stable order by iterating the set up to 4 valid items
     std::vector<std::wstring> orderedIds;
     for (const auto& id : m_selectedDevices) {
         if (orderedIds.size() >= 4) break;
-        orderedIds.push_back(id);
+        
+        bool available = false;
+        for (const auto& dev : m_availableDevices) {
+            if (dev.id == id) { available = true; break; }
+        }
+        if (!available) {
+            for (const auto& dev : m_refreshDevices) {
+                if (dev.id == id) { available = true; break; }
+            }
+        }
+        
+        if (available) {
+            orderedIds.push_back(id);
+        }
     }
     
     // Always maintain exactly 4 items

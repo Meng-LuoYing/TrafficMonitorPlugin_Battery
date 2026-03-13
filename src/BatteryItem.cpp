@@ -102,7 +102,7 @@ void BatteryItem::RebuildText()
 // 获取项目名称
 const wchar_t* BatteryItem::GetItemName() const
 {
-    static const wchar_t* names[] = { L"设备1：", L"设备2：", L"设备3：", L"设备4：" };
+    static const wchar_t* names[] = { L"设备1", L"设备2", L"设备3", L"设备4" };
     if (m_index >= 0 && m_index < 4) return names[m_index];
     return L"未知";
 }
@@ -123,7 +123,7 @@ const wchar_t* BatteryItem::GetItemId() const
 // 获取项目标签文本
 const wchar_t* BatteryItem::GetItemLableText() const
 {
-    return L" ";
+    return L"";
 }
 
 // 获取项目值文本
