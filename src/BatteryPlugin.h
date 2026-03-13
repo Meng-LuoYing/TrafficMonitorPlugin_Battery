@@ -25,11 +25,14 @@ public:
     virtual OptionReturn ShowOptionsDialog(void* hParent) override;     // 显示选项对话框
 
     // 设备选择相关的公共方法
-    std::vector<DeviceBattery> GetAvailableDevices() const;            // 获取可用设备列表
+    std::vector<DeviceBattery> GetAvailableDevices() const;               // 获取可用设备列表
+    std::vector<DeviceBattery> GetRefreshDevices() const;               // 获取刷新按钮显示的设备列表
     std::vector<std::wstring> GetSelectedDevices() const;              // 获取选中的设备列表（按顺序）
     void SetDeviceSelection(const std::wstring& deviceId, bool selected); // 设置设备选择状态
     bool IsDeviceSelected(const std::wstring& deviceId) const;          // 检查设备是否被选中
     void RefreshDevicesNow(); // 强制立即获取 API 数据并更新设备列表
+    void SetApiToken(const std::wstring& token); // 设置API Token
+    void SetApiPort(int port); // 设置API端口
     void MoveDeviceUp(const std::wstring& deviceId);  // 设备顺序上移
     void MoveDeviceDown(const std::wstring& deviceId); // 设备顺序下移
 
@@ -49,6 +52,7 @@ private:
     std::unique_ptr<BatteryItem> m_displayItem;         // 显示项目
     std::vector<std::wstring> m_selectedDevices;           // 选中的设备ID列表（按顺序）
     std::vector<DeviceBattery> m_availableDevices;      // 可用设备列表
+    std::vector<DeviceBattery> m_refreshDevices;        // 刷新按钮显示的设备列表（独立于自动请求）
     bool m_initialized = false;                         // 是否已初始化
     bool m_autoSelectFirstDevices = false;              // 是否自动选择前几个设备
     ITrafficMonitor* m_pApp = nullptr;                 // TrafficMonitor 应用指针
@@ -56,6 +60,7 @@ private:
     std::wstring m_apiToken;                            // API 令牌
     int m_authFailCount = 0;                            // 鉴权失败次数
     bool m_pluginDisabled = false;                       // 插件是否被禁用
+    bool m_stopApiRequests = false;                      // 是否停止API请求（鉴权失败后）
     int m_deviceSyncIntervalMs = 5000;                  // 设备同步间隔（毫秒）
     int m_batteryRefreshIntervalMs = 2000;               // 电量刷新间隔（毫秒）
     unsigned long long m_lastDeviceSyncTick = 0;        // 上次设备同步时间

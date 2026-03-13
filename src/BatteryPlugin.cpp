@@ -7,6 +7,7 @@
 #include <sstream>
 #include <algorithm>
 #include <commctrl.h>
+#include <thread>
 
 // 选项对话框相关的匿名命名空间
 namespace
@@ -183,8 +184,8 @@ namespace
         ListView_DeleteAllItems(state->hDeviceList);
         state->deviceIds.clear();
 
-        // Get available devices and selected devices
-        auto devices = state->plugin->GetAvailableDevices();
+        // Get refresh devices (from refresh button click) and selected devices
+        auto devices = state->plugin->GetRefreshDevices(); // 使用刷新设备列表
         auto selectedDevices = state->plugin->GetSelectedDevices();
         
         int lvIndex = 0;
@@ -384,193 +385,35 @@ namespace
         }
     }
 
-    struct TokenPromptState
-    {
-        std::wstring currentToken;
-        std::wstring resultToken;
-        bool accepted = false;
-        HWND hEdit = nullptr;
-        HFONT hFont = nullptr;
-        int failedCount = 0;
-    };
-
     LRESULT CALLBACK TokenPromptProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
-        if (msg == WM_NCCREATE)
-        {
-            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
-            SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
-        }
-
-        auto* state = reinterpret_cast<TokenPromptState*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
-        switch (msg)
-        {
-        case WM_CREATE:
-        {
-            if (!state) return -1;
-            NONCLIENTMETRICSW ncm = {};
-            ncm.cbSize = sizeof(ncm);
-            if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
-                state->hFont = CreateFontIndirectW(&ncm.lfMessageFont);
-            if (!state->hFont)
-                state->hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-
-            HWND hGroup = CreateWindowW(L"BUTTON", L"鉴权设置",
-                WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 12, 12, 396, 140, hWnd, nullptr, nullptr, nullptr);
-            wchar_t tip[128] = {};
-            wsprintfW(tip, L"鉴权失败，请输入 Token（第 %d/3 次）", state->failedCount);
-            HWND hLabel = CreateWindowW(L"STATIC", tip, WS_CHILD | WS_VISIBLE, 24, 36, 372, 20, hWnd, nullptr, nullptr, nullptr);
-            state->hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", state->currentToken.c_str(),
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 24, 70, 372, 26, hWnd, (HMENU)(INT_PTR)ID_TOKEN_PROMPT_EDIT, nullptr, nullptr);
-            SendMessageW(state->hEdit, EM_SETLIMITTEXT, 256, 0);
-
-            HWND hOk = CreateWindowW(L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 240, 164, 80, 28, hWnd, (HMENU)(INT_PTR)IDOK, nullptr, nullptr);
-            HWND hCancel = CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE, 328, 164, 80, 28, hWnd, (HMENU)(INT_PTR)IDCANCEL, nullptr, nullptr);
-
-            SendMessageW(hGroup, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(hLabel, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(state->hEdit, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(hOk, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            SendMessageW(hCancel, WM_SETFONT, (WPARAM)state->hFont, TRUE);
-            return 0;
-        }
-        case WM_SHOWWINDOW:
-            if (wParam && state && state->hEdit)
-            {
-                SetFocus(state->hEdit);
-                SendMessageW(state->hEdit, EM_SETSEL, 0, -1);
-            }
-            return 0;
-        case WM_COMMAND:
-            if (!state) return 0;
-            if (LOWORD(wParam) == IDOK)
-            {
-                wchar_t tokenText[512] = {};
-                GetWindowTextW(state->hEdit, tokenText, 511);
-                state->resultToken = tokenText;
-                state->accepted = true;
-                DestroyWindow(hWnd);
-                return 0;
-            }
-            if (LOWORD(wParam) == IDCANCEL)
-            {
-                DestroyWindow(hWnd);
-                return 0;
-            }
-            break;
-        case WM_CLOSE:
-            DestroyWindow(hWnd);
-            return 0;
-        case WM_CTLCOLORSTATIC:
-        {
-            HDC hdc = (HDC)wParam;
-            SetBkMode(hdc, TRANSPARENT);
-            return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
-        }
-        case WM_DESTROY:
-            if (state && state->hFont && state->hFont != (HFONT)GetStockObject(DEFAULT_GUI_FONT))
-            {
-                DeleteObject(state->hFont);
-                state->hFont = nullptr;
-            }
-            return 0;
-        default:
-            break;
-        }
-        return DefWindowProcW(hWnd, msg, wParam, lParam);
+        // 简化处理，直接返回FALSE，不创建任何控件
+        return FALSE;
     }
 
     bool PromptTokenDialog(HWND parent, const std::wstring& currentToken, int failedCount, std::wstring& tokenOut)
     {
-        static const wchar_t* CLASS_NAME = L"BatteryPluginTokenPromptDialog";
-        static ATOM classAtom = 0;
-        if (classAtom == 0)
-        {
-            WNDCLASSW wc = {};
-            wc.lpfnWndProc = TokenPromptProc;
-            wc.hInstance = GetModuleHandleW(nullptr);
-            wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-            wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-            wc.lpszClassName = CLASS_NAME;
-            classAtom = RegisterClassW(&wc);
-            if (classAtom == 0)
-                return false;
-        }
-
-        HWND ownerWindow = nullptr;
-        if (parent && IsWindow(parent))
-        {
-            ownerWindow = parent;
-        }
-        else
-        {
-            HWND fg = GetForegroundWindow();
-            if (fg && IsWindow(fg))
-            {
-                DWORD pid = 0;
-                GetWindowThreadProcessId(fg, &pid);
-                if (pid == GetCurrentProcessId())
-                    ownerWindow = fg;
-            }
-        }
-        RECT rcWork = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
-        HMONITOR hMonitor = nullptr;
-        if (ownerWindow)
-            hMonitor = MonitorFromWindow(ownerWindow, MONITOR_DEFAULTTONEAREST);
-        else
-        {
-            POINT pt = {};
-            GetCursorPos(&pt);
-            hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-        }
-        MONITORINFO mi = {};
-        mi.cbSize = sizeof(mi);
-        if (hMonitor && GetMonitorInfoW(hMonitor, &mi))
-            rcWork = mi.rcWork;
-
-        int width = 430;
-        int height = 240;
-        int x = rcWork.left + ((rcWork.right - rcWork.left) - width) / 2;
-        int y = rcWork.top + ((rcWork.bottom - rcWork.top) - height) / 2;
-
-        TokenPromptState state;
-        state.currentToken = currentToken;
-        state.resultToken = currentToken;
-        state.failedCount = failedCount;
-
-        if (ownerWindow) EnableWindow(ownerWindow, FALSE);
-        HWND hWnd = CreateWindowExW(WS_EX_DLGMODALFRAME, CLASS_NAME, L"设备电量 鉴权", WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            x, y, width, height, ownerWindow, nullptr, GetModuleHandleW(nullptr), &state);
-        if (!hWnd)
-        {
-            if (ownerWindow) EnableWindow(ownerWindow, TRUE);
+        // 使用静态变量确保只弹出一次
+        static bool hasShownAlert = false;
+        
+        // 特殊参数用于重置标志
+        if (failedCount == -1) {
+            hasShownAlert = false;
+            tokenOut = currentToken;
             return false;
         }
-
-        ShowWindow(hWnd, SW_SHOW);
-        UpdateWindow(hWnd);
-        MSG msg = {};
-        while (IsWindow(hWnd) && GetMessageW(&msg, nullptr, 0, 0) > 0)
-        {
-            if (!IsDialogMessageW(hWnd, &msg))
-            {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
+        
+        if (!hasShownAlert) {
+            // 使用简单的MessageBox，但在新线程中显示以避免阻塞
+            std::thread([parent]() {
+                MessageBoxW(parent, L"鉴权失败，请在插件设置中填写 Token！", L"设备电量鉴权", MB_OK | MB_ICONWARNING);
+            }).detach();
+            
+            hasShownAlert = true;
         }
-
-        if (ownerWindow)
-        {
-            EnableWindow(ownerWindow, TRUE);
-            SetActiveWindow(ownerWindow);
-        }
-
-        if (state.accepted)
-        {
-            tokenOut = state.resultToken;
-            return true;
-        }
-        return false;
+        
+        tokenOut = currentToken; // 返回原有Token
+        return false; // 表示用户没有输入新的Token
     }
 
     LRESULT CALLBACK PortDialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -765,10 +608,42 @@ namespace
         case WM_COMMAND:
         {
             const int cmd = LOWORD(wParam);
+            const int notifyCode = HIWORD(wParam);
+            
+            // Handle edit control change notifications to prevent focus loss
+            if (notifyCode == EN_CHANGE)
+            {
+                switch (cmd)
+                {
+                case ID_TOKEN_EDIT:
+                case ID_PORT_EDIT:
+                case ID_DEVICE_SYNC_EDIT:
+                case ID_BATTERY_REFRESH_EDIT:
+                    // Let the default processing handle the text change
+                    return 0;
+                }
+            }
+            
             if (cmd == ID_REFRESH_BUTTON && state && state->plugin)
             {
+                // 获取当前输入框中的Token和端口值
+                wchar_t tokenText[512] = {};
+                wchar_t portText[32] = {};
+                GetWindowTextW(state->hTokenEdit, tokenText, 511);
+                GetWindowTextW(state->hPortEdit, portText, 31);
+                std::wstring currentToken = tokenText;
+                
+                // 解析端口
+                int currentPort = 18080;
+                TryParseInteger(portText, 1, 65535, currentPort);
+                
+                // 临时更新插件中的Token和端口用于这次请求
+                state->plugin->SetApiToken(currentToken);
+                state->plugin->SetApiPort(currentPort);
+                
                 // Force a live API fetch first, then update the checkbox list
                 state->plugin->RefreshDevicesNow();
+                // 刷新设备列表显示（包括自动勾选）
                 RefreshDeviceList(state, hWnd);
                 return 0;
             }
@@ -1115,12 +990,20 @@ void BatteryPlugin::FetchAndUpdate(bool syncDevices)
     int port = 18080;
     std::wstring token;
     bool disabled = false;
+    bool stopApiRequests = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         port = m_apiPort;
         token = m_apiToken;
         disabled = m_pluginDisabled;
+        stopApiRequests = m_stopApiRequests;
     }
+    
+    // 如果已经因为鉴权失败而停止API请求，则直接返回
+    if (stopApiRequests) {
+        return;
+    }
+    
     if (disabled)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -1144,64 +1027,16 @@ void BatteryPlugin::FetchAndUpdate(bool syncDevices)
         int failCount = 0;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            failCount = m_authFailCount;
+            failCount = ++m_authFailCount;
+            m_stopApiRequests = true; // 设置停止API请求标志
             for (auto& item : m_items)
                 item->SetOffline();
+            if (m_displayItem)
+                m_displayItem->SetOffline();
         }
 
-        if (failCount >= 3)
-        {
-            {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_pluginDisabled = true;
-            }
-            MessageBoxW(nullptr, L"连续验证失败 3 次，插件已停止加载。请在插件选项中修改 Token 后重新启用。", L"设备电量", MB_OK | MB_ICONERROR);
-            return;
-        }
-
-        std::wstring editingToken = token;
-        while (failCount < 3)
-        {
-            std::wstring inputToken = editingToken;
-            bool accepted = PromptTokenDialog(nullptr, editingToken, failCount + 1, inputToken);
-            if (!accepted)
-            {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_pluginDisabled = true;
-                return;
-            }
-
-            std::string verifyJson = HttpGet(API_HOST, port, API_PATH, inputToken.empty() ? nullptr : inputToken.c_str(), 3000);
-            if (verifyJson.empty())
-            {
-                MessageBoxW(nullptr, L"验证 Token 失败：接口不可达，请稍后重试。", L"设备电量", MB_OK | MB_ICONWARNING);
-                return;
-            }
-            if (IsAuthFailedResponse(verifyJson))
-            {
-                failCount++;
-                editingToken = inputToken;
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_authFailCount = failCount;
-                continue;
-            }
-
-            {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_apiToken = inputToken;
-                m_authFailCount = 0;
-                m_pluginDisabled = false;
-            }
-            SaveConfig();
-            RestartTrafficMonitor();
-            return;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_pluginDisabled = true;
-        }
-        MessageBoxW(nullptr, L"Token 连续验证失败 3 次，插件已停止加载。请在插件选项中修改 Token 后重新启用。", L"设备电量", MB_OK | MB_ICONERROR);
+        // 鉴权失败，显示提示框（只弹出一次），但插件继续运行
+        PromptTokenDialog(nullptr, token, failCount, token);
         return;
     }
 
@@ -1212,7 +1047,12 @@ void BatteryPlugin::FetchAndUpdate(bool syncDevices)
         std::lock_guard<std::mutex> lock(m_mutex);
         m_authFailCount = 0;
         m_pluginDisabled = false;
+        m_stopApiRequests = false; // 重置停止API请求标志
         m_availableDevices = devices;
+        
+        // 成功鉴权，重置提示框标志
+        std::wstring dummy;
+        PromptTokenDialog(nullptr, L"", -1, dummy);
         
         if (m_autoSelectFirstDevices && !devices.empty()) {
             m_autoSelectFirstDevices = false;
@@ -1381,6 +1221,7 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
         m_apiToken = newToken;
         m_authFailCount = 0;
         m_pluginDisabled = false;
+        m_stopApiRequests = false; // 重置停止API请求标志，允许重新尝试
         m_deviceSyncIntervalMs = newDeviceSyncSec * 1000;
         m_batteryRefreshIntervalMs = newBatteryRefreshSec * 1000;
         m_lastDeviceSyncTick = 0;
@@ -1404,10 +1245,13 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
         m_lastBatteryRefreshTick = now;
     }
     
-    // If the number of items changes or item identities change, TM needs a restart to pick up new GetItem() layout
+    // 注释掉设备变化重启逻辑，避免不必要的程序重启
+    // 用户可以通过手动重启TrafficMonitor来应用设备数量变化
+    /*
     if (devicesChanged) {
         RestartTrafficMonitor();
     }
+    */
     
     return OR_OPTION_CHANGED;
 }
@@ -1605,6 +1449,12 @@ std::vector<DeviceBattery> BatteryPlugin::GetAvailableDevices() const
     return m_availableDevices;
 }
 
+std::vector<DeviceBattery> BatteryPlugin::GetRefreshDevices() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_refreshDevices;
+}
+
 std::vector<std::wstring> BatteryPlugin::GetSelectedDevices() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -1635,9 +1485,73 @@ bool BatteryPlugin::IsDeviceSelected(const std::wstring& deviceId) const
 
 void BatteryPlugin::RefreshDevicesNow()
 {
-    // Makes a blocking HTTP request to get the latest device list.
-    // Called from the dialog UI thread when the user clicks the Refresh button.
-    FetchAndUpdate(true);
+    // 获取当前设置
+    int port = 18080;
+    std::wstring token;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        port = m_apiPort;
+        token = m_apiToken;
+        // 重置停止标志，允许这次刷新请求
+        m_stopApiRequests = false;
+    }
+    
+    // 发起API请求
+    std::string json = HttpGet(API_HOST, port, API_PATH, token.empty() ? nullptr : token.c_str(), 3000);
+    
+    if (json.empty())
+    {
+        MessageBoxW(GetForegroundWindow(), L"请求失败：接口不可达，请检查网络和端口设置。", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        return;
+    }
+    
+    if (IsAuthFailedResponse(json))
+    {
+        // 鉴权失败，提示错误并停止后续自动请求
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stopApiRequests = true;
+        m_authFailCount++;
+        
+        MessageBoxW(GetForegroundWindow(), L"鉴权失败Token错误", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        return;
+    }
+    
+    // 请求成功，解析设备数据
+    auto devices = ParseBatteryJson(json);
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_authFailCount = 0;
+        m_pluginDisabled = false;
+        m_stopApiRequests = false; // 确保后续自动请求正常
+        m_availableDevices = devices;      // 用于插件主界面自动请求
+        m_refreshDevices = devices;       // 用于刷新按钮显示（独立存储）
+        
+        // 只在首次启动时自动勾选设备，手动刷新时不自动勾选
+        if (m_autoSelectFirstDevices && !devices.empty()) {
+            m_autoSelectFirstDevices = false;
+            for (const auto& dev : devices) {
+                if (m_selectedDevices.size() >= 4) break;
+                m_selectedDevices.push_back(dev.id);
+            }
+        }
+        // 手动刷新时保持用户之前的选择，不做自动勾选
+        
+        // 重置提示框标志
+        std::wstring dummy;
+        PromptTokenDialog(nullptr, L"", -1, dummy);
+    }
+}
+
+void BatteryPlugin::SetApiToken(const std::wstring& token)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_apiToken = token;
+}
+
+void BatteryPlugin::SetApiPort(int port)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_apiPort = port;
 }
 
 // 设备顺序上移
