@@ -40,7 +40,7 @@ public:
 
 private:
     void InitDevices();                    // 初始化设备
-    void FetchAndUpdate(bool syncDevices); // 获取并更新数据
+    void FetchAndUpdate(); // 获取并更新数据
     void LoadConfig();                      // 加载配置
     void UpdateConfigDir(const wchar_t* dir); // 更新配置目录
     std::wstring GetConfigPath() const;     // 获取配置文件路径

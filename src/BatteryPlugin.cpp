@@ -19,22 +19,18 @@ namespace
         int resultPort = 18080;
         std::wstring currentToken;
         std::wstring resultToken;
-        int currentDeviceSyncSec = 5;
-        int resultDeviceSyncSec = 5;
-        int currentBatteryRefreshSec = 2;
-        int resultBatteryRefreshSec = 2;
+        int currentRefreshSec = 2;
+        int resultRefreshSec = 2;
         bool accepted = false;
         HWND hPortEdit = nullptr;
         HWND hTokenEdit = nullptr;
-        HWND hDeviceSyncEdit = nullptr;
-        HWND hBatteryRefreshEdit = nullptr;
+        HWND hRefreshEdit = nullptr;
         HWND hNetworkGroup = nullptr;
         HWND hTimingGroup = nullptr;
         HWND hDeviceGroup = nullptr;
         HWND hPortLabel = nullptr;
         HWND hTokenLabel = nullptr;
-        HWND hDeviceSyncLabel = nullptr;
-        HWND hBatteryRefreshLabel = nullptr;
+        HWND hRefreshLabel = nullptr;
         HWND hOkButton = nullptr;
         HWND hCancelButton = nullptr;
         HWND hApplyButton = nullptr;
@@ -63,8 +59,8 @@ namespace
     constexpr int ID_MOVE_DOWN_BUTTON = 1104;
     constexpr int ID_DEVICE_CHECKBOX_BASE = 2000;
     constexpr int ID_DEVICE_LIST = 2001;
-    constexpr int DIALOG_WIDTH = 380;
-    constexpr int DIALOG_HEIGHT = 560;
+    constexpr int DIALOG_WIDTH = 360;
+    constexpr int DIALOG_HEIGHT = 480;
 
     // 尝试解析整数文本
     bool TryParseInteger(const wchar_t* text, int minValue, int maxValue, int& out)
@@ -263,10 +259,10 @@ namespace
 
         // Logical (unscrolled) top positions
         const int networkVirtTop = 16;
-        const int networkH       = 122;
-        const int timingVirtTop  = networkVirtTop + networkH + 10; // 148
-        const int timingH        = 124;
-        const int deviceVirtTop  = timingVirtTop + timingH + 10;   // 282
+        const int networkH       = 100;
+        const int timingVirtTop  = networkVirtTop + networkH + 6; // 122
+        const int timingH        = 60;
+        const int deviceVirtTop  = timingVirtTop + timingH + 6;   // 188
 
         // Device group height
         int deviceH = 150;
@@ -305,15 +301,13 @@ namespace
         SetWindowPos(state->hNetworkGroup,      nullptr, margin, networkVirtTop - sp, groupW, networkH, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(state->hPortLabel,         nullptr, labelLeft, networkVirtTop + 26 - sp, 190, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(state->hPortEdit,          nullptr, valueLeft, networkVirtTop + 22 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hTokenLabel,        nullptr, labelLeft, networkVirtTop + 70 - sp, 190, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hTokenEdit,         nullptr, valueLeft, networkVirtTop + 66 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hTokenLabel,        nullptr, labelLeft, networkVirtTop + 60 - sp, 190, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hTokenEdit,         nullptr, valueLeft, networkVirtTop + 56 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Timing group + controls
         SetWindowPos(state->hTimingGroup,        nullptr, margin, timingVirtTop - sp, groupW, timingH, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hDeviceSyncLabel,    nullptr, labelLeft, timingVirtTop + 26 - sp, 190, 20, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hDeviceSyncEdit,     nullptr, valueLeft, timingVirtTop + 22 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hBatteryRefreshLabel,nullptr, labelLeft, timingVirtTop + 70 - sp, 190, 20, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hBatteryRefreshEdit, nullptr, valueLeft, timingVirtTop + 66 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hRefreshLabel,       nullptr, labelLeft, timingVirtTop + 26 - sp, 260, 20, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hRefreshEdit,        nullptr, valueLeft, timingVirtTop + 22 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Device group: resize with SWP_FRAMECHANGED so the groupbox border is redrawn correctly
         SetWindowPos(state->hDeviceGroup, nullptr, margin, deviceVirtTop - sp, groupW, deviceH,
@@ -454,18 +448,14 @@ namespace
                 WS_CHILD | WS_VISIBLE, 32, 46, 130, 20, hWnd, nullptr, nullptr, nullptr);
             state->hTokenLabel = CreateWindowW(L"STATIC", L"Token\uFF1A",
                 WS_CHILD | WS_VISIBLE, 32, 90, 130, 20, hWnd, nullptr, nullptr, nullptr);
-            state->hDeviceSyncLabel = CreateWindowW(L"STATIC", L"\u8BBE\u5907\u53D8\u52A8\u68C0\u6D4B\u95F4\u9694\uFF08\u79D2\uFF0C1-3600\uFF09\uFF1A",
+            state->hRefreshLabel = CreateWindowW(L"STATIC", L"\u6570\u636E\u5237\u65B0\u95F4\u9694\uFF08\u79D2\uFF0C1-3600\uFF09\uFF1A",
                 WS_CHILD | WS_VISIBLE, 32, 178, 260, 20, hWnd, nullptr, nullptr, nullptr);
-            state->hBatteryRefreshLabel = CreateWindowW(L"STATIC", L"\u7535\u91CF\u5237\u65B0\u95F4\u9694\uFF08\u79D2\uFF0C1-3600\uFF09\uFF1A",
-                WS_CHILD | WS_VISIBLE, 32, 222, 260, 20, hWnd, nullptr, nullptr, nullptr);
 
             // Edits
             wchar_t portText[16] = {};
-            wchar_t syncText[16] = {};
             wchar_t refreshText[16] = {};
             wsprintfW(portText, L"%d", state->currentPort);
-            wsprintfW(syncText, L"%d", state->currentDeviceSyncSec);
-            wsprintfW(refreshText, L"%d", state->currentBatteryRefreshSec);
+            wsprintfW(refreshText, L"%d", state->currentRefreshSec);
 
             state->hPortEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", portText,
                 WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 42, 274, 24,
@@ -473,16 +463,12 @@ namespace
             state->hTokenEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", state->currentToken.c_str(),
                 WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 86, 274, 24,
                 hWnd, (HMENU)(INT_PTR)ID_TOKEN_EDIT, nullptr, nullptr);
-            state->hDeviceSyncEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", syncText,
+            state->hRefreshEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", refreshText,
                 WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 174, 274, 24,
-                hWnd, (HMENU)(INT_PTR)ID_DEVICE_SYNC_EDIT, nullptr, nullptr);
-            state->hBatteryRefreshEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", refreshText,
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 290, 218, 274, 24,
                 hWnd, (HMENU)(INT_PTR)ID_BATTERY_REFRESH_EDIT, nullptr, nullptr);
             SendMessageW(state->hPortEdit, EM_SETLIMITTEXT, 5, 0);
             SendMessageW(state->hTokenEdit, EM_SETLIMITTEXT, 256, 0);
-            SendMessageW(state->hDeviceSyncEdit, EM_SETLIMITTEXT, 4, 0);
-            SendMessageW(state->hBatteryRefreshEdit, EM_SETLIMITTEXT, 4, 0);
+            SendMessageW(state->hRefreshEdit, EM_SETLIMITTEXT, 4, 0);
 
             // List View
             state->hDeviceList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
@@ -526,9 +512,9 @@ namespace
             auto setFont = [&](HWND h) { if (h && state->hFont) SendMessageW(h, WM_SETFONT, (WPARAM)state->hFont, TRUE); };
             setFont(state->hNetworkGroup); setFont(state->hTimingGroup); setFont(state->hDeviceGroup);
             setFont(state->hPortLabel);    setFont(state->hTokenLabel);
-            setFont(state->hDeviceSyncLabel); setFont(state->hBatteryRefreshLabel);
+            setFont(state->hRefreshLabel);
             setFont(state->hPortEdit);     setFont(state->hTokenEdit);
-            setFont(state->hDeviceSyncEdit); setFont(state->hBatteryRefreshEdit);
+            setFont(state->hRefreshEdit);
             setFont(state->hDeviceList);
             setFont(state->hRefreshButton);
             setFont(state->hMoveUpButton); setFont(state->hMoveDownButton);
@@ -630,7 +616,6 @@ namespace
                 {
                 case ID_TOKEN_EDIT:
                 case ID_PORT_EDIT:
-                case ID_DEVICE_SYNC_EDIT:
                 case ID_BATTERY_REFRESH_EDIT:
                     // Let the default processing handle the text change
                     return 0;
@@ -724,7 +709,7 @@ namespace
                 return 0;
             }
             
-            if ((cmd == IDOK || cmd == ID_APPLY_BUTTON) && state && state->hPortEdit && state->hTokenEdit && state->hDeviceSyncEdit && state->hBatteryRefreshEdit)
+            if ((cmd == IDOK || cmd == ID_APPLY_BUTTON) && state && state->hPortEdit && state->hTokenEdit && state->hRefreshEdit)
             {
                 // Apply device selections and ordering based on ListView state
                 if (state->hDeviceList && state->plugin)
@@ -754,12 +739,10 @@ namespace
 
                 wchar_t portText[32] = {};
                 wchar_t tokenText[512] = {};
-                wchar_t syncText[32] = {};
                 wchar_t refreshText[32] = {};
                 GetWindowTextW(state->hPortEdit, portText, 31);
                 GetWindowTextW(state->hTokenEdit, tokenText, 511);
-                GetWindowTextW(state->hDeviceSyncEdit, syncText, 31);
-                GetWindowTextW(state->hBatteryRefreshEdit, refreshText, 31);
+                GetWindowTextW(state->hRefreshEdit, refreshText, 31);
 
                 int parsedPort = 0;
                 if (!TryParseInteger(portText, 1, 65535, parsedPort))
@@ -770,28 +753,18 @@ namespace
                     return 0;
                 }
 
-                int parsedSyncSec = 0;
-                if (!TryParseInteger(syncText, 1, 3600, parsedSyncSec))
-                {
-                    MessageBoxW(hWnd, L"设备变动检测间隔必须是 1 到 3600 之间的整数秒。", L"设备电量", MB_OK | MB_ICONWARNING);
-                    SetFocus(state->hDeviceSyncEdit);
-                    SendMessageW(state->hDeviceSyncEdit, EM_SETSEL, 0, -1);
-                    return 0;
-                }
-
                 int parsedRefreshSec = 0;
                 if (!TryParseInteger(refreshText, 1, 3600, parsedRefreshSec))
                 {
-                    MessageBoxW(hWnd, L"电量刷新间隔必须是 1 到 3600 之间的整数秒。", L"设备电量", MB_OK | MB_ICONWARNING);
-                    SetFocus(state->hBatteryRefreshEdit);
-                    SendMessageW(state->hBatteryRefreshEdit, EM_SETSEL, 0, -1);
+                    MessageBoxW(hWnd, L"刷新间隔必须是 1 到 3600 之间的整数秒。", L"设备电量", MB_OK | MB_ICONWARNING);
+                    SetFocus(state->hRefreshEdit);
+                    SendMessageW(state->hRefreshEdit, EM_SETSEL, -1, -1);
                     return 0;
                 }
 
                 state->resultPort = parsedPort;
                 state->resultToken = tokenText;
-                state->resultDeviceSyncSec = parsedSyncSec;
-                state->resultBatteryRefreshSec = parsedRefreshSec;
+                state->resultRefreshSec = parsedRefreshSec;
                 state->applied = true;
                 state->accepted = true;
                 if (cmd == IDOK)
@@ -874,7 +847,7 @@ namespace
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    bool ShowOptionsDialogWindow(HWND parent, int currentPort, const std::wstring& currentToken, int currentDeviceSyncSec, int currentBatteryRefreshSec, int& resultPort, std::wstring& resultToken, int& resultDeviceSyncSec, int& resultBatteryRefreshSec)
+    bool ShowOptionsDialogWindow(HWND parent, int currentPort, const std::wstring& currentToken, int currentRefreshSec, int& resultPort, std::wstring& resultToken, int& resultRefreshSec)
     {
         static const wchar_t* CLASS_NAME = L"BatteryPluginPortDialog";
         static ATOM classAtom = 0;
@@ -918,10 +891,8 @@ namespace
         state.resultPort = currentPort;
         state.currentToken = currentToken;
         state.resultToken = currentToken;
-        state.currentDeviceSyncSec = currentDeviceSyncSec;
-        state.resultDeviceSyncSec = currentDeviceSyncSec;
-        state.currentBatteryRefreshSec = currentBatteryRefreshSec;
-        state.resultBatteryRefreshSec = currentBatteryRefreshSec;
+        state.currentRefreshSec = currentRefreshSec;
+        state.resultRefreshSec = currentRefreshSec;
         state.plugin = &BatteryPlugin::Instance();
 
         if (ownerWindow) EnableWindow(ownerWindow, FALSE);
@@ -966,8 +937,7 @@ namespace
         {
             resultPort = state.resultPort;
             resultToken = state.resultToken;
-            resultDeviceSyncSec = state.resultDeviceSyncSec;
-            resultBatteryRefreshSec = state.resultBatteryRefreshSec;
+            resultRefreshSec = state.resultRefreshSec;
             return true;
         }
         return false;
@@ -989,16 +959,15 @@ void BatteryPlugin::InitDevices()
 {
     if (m_initialized) return;
     m_initialized = true;
-    FetchAndUpdate(true);
+    FetchAndUpdate();
     unsigned long long now = GetTickCount64();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_lastDeviceSyncTick = now;
-        m_lastBatteryRefreshTick = now;
+        m_lastRefreshTick = now;
     }
 }
 
-void BatteryPlugin::FetchAndUpdate(bool syncDevices)
+void BatteryPlugin::FetchAndUpdate()
 {
     int port = 18080;
     std::wstring token;
@@ -1131,29 +1100,19 @@ void BatteryPlugin::DataRequired()
     else
     {
         unsigned long long now = GetTickCount64();
-        bool needDeviceSync = false;
-        bool needBatteryRefresh = false;
+        bool needRefresh = false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            unsigned long long deviceElapsed = now - m_lastDeviceSyncTick;
-            unsigned long long refreshElapsed = now - m_lastBatteryRefreshTick;
-            needDeviceSync = (deviceElapsed >= (unsigned long long)m_deviceSyncIntervalMs);
-            needBatteryRefresh = (refreshElapsed >= (unsigned long long)m_batteryRefreshIntervalMs);
-            if (needDeviceSync)
+            unsigned long long elapsed = now - m_lastRefreshTick;
+            needRefresh = (elapsed >= (unsigned long long)m_refreshIntervalMs);
+            if (needRefresh)
             {
-                m_lastDeviceSyncTick = now;
-                m_lastBatteryRefreshTick = now;
-            }
-            else if (needBatteryRefresh)
-            {
-                m_lastBatteryRefreshTick = now;
+                m_lastRefreshTick = now;
             }
         }
 
-        if (needDeviceSync)
-            FetchAndUpdate(true);
-        else if (needBatteryRefresh)
-            FetchAndUpdate(false);
+        if (needRefresh)
+            FetchAndUpdate();
     }
 }
 
@@ -1202,20 +1161,17 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
 {
     int currentPort = 18080;
     std::wstring currentToken;
-    int currentDeviceSyncSec = 5;
-    int currentBatteryRefreshSec = 2;
+    int currentRefreshSec = 2;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         currentPort = m_apiPort;
         currentToken = m_apiToken;
-        currentDeviceSyncSec = m_deviceSyncIntervalMs / 1000;
-        currentBatteryRefreshSec = m_batteryRefreshIntervalMs / 1000;
+        currentRefreshSec = m_refreshIntervalMs / 1000;
     }
 
     int newPort = currentPort;
     std::wstring newToken = currentToken;
-    int newDeviceSyncSec = currentDeviceSyncSec;
-    int newBatteryRefreshSec = currentBatteryRefreshSec;
+    int newRefreshSec = currentRefreshSec;
     
     // Track if device selection changed to force restart
     std::vector<std::wstring> oldSelected;
@@ -1224,11 +1180,11 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
         oldSelected = m_selectedDevices;
     }
 
-    bool accepted = ShowOptionsDialogWindow(reinterpret_cast<HWND>(hParent), currentPort, currentToken, currentDeviceSyncSec, currentBatteryRefreshSec, newPort, newToken, newDeviceSyncSec, newBatteryRefreshSec);
+    bool accepted = ShowOptionsDialogWindow(reinterpret_cast<HWND>(hParent), currentPort, currentToken, currentRefreshSec, newPort, newToken, newRefreshSec);
     if (!accepted)
         return OR_OPTION_UNCHANGED;
 
-    bool changed = (newPort != currentPort) || (newToken != currentToken) || (newDeviceSyncSec != currentDeviceSyncSec) || (newBatteryRefreshSec != currentBatteryRefreshSec);
+    bool changed = (newPort != currentPort) || (newToken != currentToken) || (newRefreshSec != currentRefreshSec);
     if (!changed)
         return OR_OPTION_UNCHANGED;
 
@@ -1239,10 +1195,8 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
         m_authFailCount = 0;
         m_pluginDisabled = false;
         m_stopApiRequests = false; // 重置停止API请求标志，允许重新尝试
-        m_deviceSyncIntervalMs = newDeviceSyncSec * 1000;
-        m_batteryRefreshIntervalMs = newBatteryRefreshSec * 1000;
-        m_lastDeviceSyncTick = 0;
-        m_lastBatteryRefreshTick = 0;
+        m_refreshIntervalMs = newRefreshSec * 1000;
+        m_lastRefreshTick = 0;
     }
     
     // Check if the actual selected device set changed
@@ -1254,12 +1208,11 @@ ITMPlugin::OptionReturn BatteryPlugin::ShowOptionsDialog(void* hParent)
     
     SaveConfig();
     RebuildItems(); // Rebuild items locally so new devices are allocated
-    FetchAndUpdate(true);
+    FetchAndUpdate();
     unsigned long long now = GetTickCount64();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_lastDeviceSyncTick = now;
-        m_lastBatteryRefreshTick = now;
+        m_lastRefreshTick = now;
     }
     
     // 注释掉设备变化重启逻辑，避免不必要的程序重启
@@ -1319,25 +1272,24 @@ void BatteryPlugin::LoadConfig()
         m_apiPort = port;
     }
 
-    int fallbackDeviceSyncSec = 5;
-    int fallbackBatteryRefreshSec = 2;
+    int fallbackRefreshSec = 2;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        fallbackDeviceSyncSec = m_deviceSyncIntervalMs / 1000;
-        fallbackBatteryRefreshSec = m_batteryRefreshIntervalMs / 1000;
+        fallbackRefreshSec = m_refreshIntervalMs / 1000;
     }
 
-    int deviceSyncSec = GetPrivateProfileIntW(L"timing", L"device_sync_sec", fallbackDeviceSyncSec, configPath.c_str());
-    int batteryRefreshSec = GetPrivateProfileIntW(L"timing", L"battery_refresh_sec", fallbackBatteryRefreshSec, configPath.c_str());
-    if (deviceSyncSec < 1) deviceSyncSec = 1;
-    if (deviceSyncSec > 3600) deviceSyncSec = 3600;
-    if (batteryRefreshSec < 1) batteryRefreshSec = 1;
-    if (batteryRefreshSec > 3600) batteryRefreshSec = 3600;
+    // 优先读取合并后的键值，若不存在则读取旧的电量刷新键值作为回退
+    int refreshSec = GetPrivateProfileIntW(L"timing", L"refresh_interval_sec", -1, configPath.c_str());
+    if (refreshSec == -1) {
+        refreshSec = GetPrivateProfileIntW(L"timing", L"battery_refresh_sec", fallbackRefreshSec, configPath.c_str());
+    }
+    
+    if (refreshSec < 1) refreshSec = 1;
+    if (refreshSec > 3600) refreshSec = 3600;
 
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_deviceSyncIntervalMs = deviceSyncSec * 1000;
-        m_batteryRefreshIntervalMs = batteryRefreshSec * 1000;
+        m_refreshIntervalMs = refreshSec * 1000;
     }
 
     // Load device selections
@@ -1382,15 +1334,13 @@ void BatteryPlugin::SaveConfig()
 
     int port = 18080;
     std::wstring token;
-    int deviceSyncSec = 5;
-    int batteryRefreshSec = 2;
+    int refreshSec = 2;
     std::vector<std::wstring> selectedDevices;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         port = m_apiPort;
         token = m_apiToken;
-        deviceSyncSec = m_deviceSyncIntervalMs / 1000;
-        batteryRefreshSec = m_batteryRefreshIntervalMs / 1000;
+        refreshSec = m_refreshIntervalMs / 1000;
         selectedDevices = m_selectedDevices;
     }
     wchar_t text[16] = {};
@@ -1398,12 +1348,9 @@ void BatteryPlugin::SaveConfig()
     WritePrivateProfileStringW(L"network", L"port", text, configPath.c_str());
     WritePrivateProfileStringW(L"auth", L"token", token.c_str(), configPath.c_str());
 
-    wchar_t syncText[16] = {};
     wchar_t refreshText[16] = {};
-    wsprintfW(syncText, L"%d", deviceSyncSec);
-    wsprintfW(refreshText, L"%d", batteryRefreshSec);
-    WritePrivateProfileStringW(L"timing", L"device_sync_sec", syncText, configPath.c_str());
-    WritePrivateProfileStringW(L"timing", L"battery_refresh_sec", refreshText, configPath.c_str());
+    wsprintfW(refreshText, L"%d", refreshSec);
+    WritePrivateProfileStringW(L"timing", L"refresh_interval_sec", refreshText, configPath.c_str());
 
     // Save device selections
     std::wstring selectedDevicesText;
