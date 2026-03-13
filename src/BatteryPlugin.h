@@ -35,15 +35,15 @@ public:
     void SetApiPort(int port); // 设置API端口
     void MoveDeviceUp(const std::wstring& deviceId);  // 设备顺序上移
     void MoveDeviceDown(const std::wstring& deviceId); // 设备顺序下移
+    void SaveConfig();                      // 保存配置
+    void RebuildItems(); // 严格基于 m_selectedDevices 重建 m_items 向量
 
 private:
     void InitDevices();                    // 初始化设备
     void FetchAndUpdate(bool syncDevices); // 获取并更新数据
     void LoadConfig();                      // 加载配置
-    void SaveConfig();                      // 保存配置
     void UpdateConfigDir(const wchar_t* dir); // 更新配置目录
     std::wstring GetConfigPath() const;     // 获取配置文件路径
-    void RebuildItems(); // 严格基于 m_selectedDevices 重建 m_items 向量
 
 private:
     static BatteryPlugin m_instance;        // 单例实例
@@ -61,10 +61,8 @@ private:
     int m_authFailCount = 0;                            // 鉴权失败次数
     bool m_pluginDisabled = false;                       // 插件是否被禁用
     bool m_stopApiRequests = false;                      // 是否停止API请求（鉴权失败后）
-    int m_deviceSyncIntervalMs = 5000;                  // 设备同步间隔（毫秒）
-    int m_batteryRefreshIntervalMs = 2000;               // 电量刷新间隔（毫秒）
-    unsigned long long m_lastDeviceSyncTick = 0;        // 上次设备同步时间
-    unsigned long long m_lastBatteryRefreshTick = 0;     // 上次电量刷新时间
+    int m_refreshIntervalMs = 2000;                      // 数据刷新间隔（毫秒）
+    unsigned long long m_lastRefreshTick = 0;           // 上次数据刷新时间
     std::wstring m_configDir;                            // 配置目录
     mutable std::mutex m_mutex;                          // 线程安全互斥锁
 

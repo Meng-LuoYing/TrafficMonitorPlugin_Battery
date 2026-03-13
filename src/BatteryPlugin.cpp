@@ -89,9 +89,9 @@ namespace
         switch (msg)
         {
         case WM_COMMAND:
+        case WM_NOTIFY:
             // Forward to grandparent (PortDialogProc)
-            SendMessageW(GetParent(hWnd), WM_COMMAND, wParam, lParam);
-            return 0;
+            return SendMessageW(GetParent(hWnd), msg, wParam, lParam);
         case WM_CTLCOLORBTN:
         {
             // Remove the grey background from child checkboxes/buttons
@@ -181,6 +181,7 @@ namespace
     {
         if (!state || !state->plugin || !hDialog || !state->hDeviceList) return;
 
+        state->bCheckingLimits = true;
         ListView_DeleteAllItems(state->hDeviceList);
         state->deviceIds.clear();
 
@@ -236,6 +237,8 @@ namespace
                 lvIndex++;
             }
         }
+        
+        state->bCheckingLimits = false;
     }
 
     // Layout all controls accounting for current scroll position.
@@ -549,7 +552,8 @@ namespace
             {
                 LayoutAndScroll(state, hWnd);
                 SetFocus(state->hPortEdit);
-                SendMessageW(state->hPortEdit, EM_SETSEL, 0, -1);
+                // 将光标设置到末尾，而不是全选，防止用户打字瞬间被覆盖，同时解决失焦问题
+                SendMessageW(state->hPortEdit, EM_SETSEL, -1, -1);
             }
             return 0;
         case WM_CTLCOLORSTATIC:
@@ -569,6 +573,15 @@ namespace
                 if ((pnmv->uChanged & LVIF_STATE) && 
                     (pnmv->uNewState & LVIS_STATEIMAGEMASK) != (pnmv->uOldState & LVIS_STATEIMAGEMASK))
                 {
+                    if (!state->bCheckingLimits && pnmv->iItem >= 0 && pnmv->iItem < (int)state->deviceIds.size())
+                    {
+                        bool isChecked = ((pnmv->uNewState & LVIS_STATEIMAGEMASK) >> 12) == 2;
+                        std::wstring deviceId = state->deviceIds[pnmv->iItem];
+                        state->plugin->SetDeviceSelection(deviceId, isChecked);
+                        state->plugin->SaveConfig();
+                        state->plugin->RebuildItems();
+                    }
+
                     // Forces full redraw to update the gray text over items
                     InvalidateRect(state->hDeviceList, nullptr, FALSE);
                 }
@@ -1029,6 +1042,10 @@ void BatteryPlugin::FetchAndUpdate(bool syncDevices)
             std::lock_guard<std::mutex> lock(m_mutex);
             failCount = ++m_authFailCount;
             m_stopApiRequests = true; // 设置停止API请求标志
+            
+            // 只要鉴权失败，不论Token是否为空，都不再视为首次启动加载
+            m_autoSelectFirstDevices = false;
+            
             for (auto& item : m_items)
                 item->SetOffline();
             if (m_displayItem)
@@ -1434,7 +1451,26 @@ void BatteryPlugin::RebuildItems()
     for (size_t i = 0; i < 4; ++i) {
         m_items[i]->SetIndex((int)i);
         if (i < orderedIds.size()) {
-            m_items[i]->InitWithId(orderedIds[i]); 
+            bool found = false;
+            for (const auto& dev : m_availableDevices) {
+                if (dev.id == orderedIds[i]) {
+                    m_items[i]->Update(dev);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                for (const auto& dev : m_refreshDevices) {
+                    if (dev.id == orderedIds[i]) {
+                        m_items[i]->Update(dev);
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                m_items[i]->InitWithId(orderedIds[i]); 
+            }
         } else {
             // Clear unselected slots
             m_items[i]->InitWithId(L"");
@@ -1501,7 +1537,10 @@ void BatteryPlugin::RefreshDevicesNow()
     
     if (json.empty())
     {
-        MessageBoxW(GetForegroundWindow(), L"请求失败：接口不可达，请检查网络和端口设置。", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        // 使用独立线程弹出错误框避免阻塞UI和造成主窗口失焦
+        std::thread([]() {
+            MessageBoxW(nullptr, L"请求失败：接口不可达，请检查网络和端口设置。", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        }).detach();
         return;
     }
     
@@ -1511,8 +1550,12 @@ void BatteryPlugin::RefreshDevicesNow()
         std::lock_guard<std::mutex> lock(m_mutex);
         m_stopApiRequests = true;
         m_authFailCount++;
+        m_autoSelectFirstDevices = false; // 手动刷新失败也取消自动勾选，后续由用户手动选择
         
-        MessageBoxW(GetForegroundWindow(), L"鉴权失败Token错误", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        // 使用独立线程弹出错误框避免阻塞UI和造成主窗口失焦
+        std::thread([]() {
+            MessageBoxW(nullptr, L"鉴权失败Token错误", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        }).detach();
         return;
     }
     
@@ -1526,15 +1569,9 @@ void BatteryPlugin::RefreshDevicesNow()
         m_availableDevices = devices;      // 用于插件主界面自动请求
         m_refreshDevices = devices;       // 用于刷新按钮显示（独立存储）
         
-        // 只在首次启动时自动勾选设备，手动刷新时不自动勾选
-        if (m_autoSelectFirstDevices && !devices.empty()) {
-            m_autoSelectFirstDevices = false;
-            for (const auto& dev : devices) {
-                if (m_selectedDevices.size() >= 4) break;
-                m_selectedDevices.push_back(dev.id);
-            }
-        }
         // 手动刷新时保持用户之前的选择，不做自动勾选
+        m_autoSelectFirstDevices = false; // 取消首次启动标志
+
         
         // 重置提示框标志
         std::wstring dummy;
