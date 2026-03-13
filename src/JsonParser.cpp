@@ -188,16 +188,6 @@ std::vector<DeviceBattery> ParseBatteryJson(const std::string& json)
             continue;
         }
 
-        std::string source = ExtractStringValue(obj, "source");
-        if (!source.empty() && source != "ble")
-        {
-            pos = objEnd;
-            size_t next = json.find_first_not_of(" \t\r\n,", pos);
-            if (next != std::string::npos && json[next] == ']')
-                break;
-            continue;
-        }
-
         // renamedName 优先于 name
         std::string renamedName = ExtractStringValue(obj, "renamedName");
         bool hasRenamedName = false;

@@ -1042,15 +1042,23 @@ void BatteryPlugin::FetchAndUpdate()
     if (json.empty())
     {
         bool dialogOpening = false;
+        bool alreadyStopped = false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             dialogOpening = m_optionsDialogOpening;
+            alreadyStopped = m_stopApiRequests;
         }
         
-        if (!dialogOpening) {
+        if (!dialogOpening && !alreadyStopped) {
+            // 设置熔断标志点：一旦弹窗，就停止后续自动请求，直到用户手动刷新
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_stopApiRequests = true;
+            }
+            
             // 使用独立线程弹出错误框避免阻塞UI和造成主窗口失焦
             std::thread([]() {
-                MessageBoxW(nullptr, L"请求失败：接口不可达，请检查网络和端口设置。", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+                MessageBoxW(nullptr, L"API请求失败，请检查端口设置和EasyBluetooth是否开启。", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
             }).detach();
         }
         
@@ -1149,6 +1157,13 @@ void BatteryPlugin::DataRequired()
         InitDevices();
     else
     {
+        bool dialogOpening = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            dialogOpening = m_optionsDialogOpening;
+        }
+        if (dialogOpening) return; // 对话框打开期间停止后台自动刷新
+
         unsigned long long now = GetTickCount64();
         bool needRefresh = false;
         {
@@ -1174,7 +1189,7 @@ const wchar_t* BatteryPlugin::GetInfo(PluginInfoIndex index)
     case TMI_DESCRIPTION: return L"通过本地 REST API 显示设备电量";
     case TMI_AUTHOR:      return L"梦落影逝";
     case TMI_COPYRIGHT:   return L"Copyright (C) 2026";
-    case TMI_VERSION:     return L"1.0.0";
+    case TMI_VERSION:     return L"1.0.1";
     case TMI_URL:
     {
         static thread_local std::wstring url;
@@ -1552,7 +1567,7 @@ void BatteryPlugin::RefreshDevicesNow()
     {
         // 使用独立线程弹出错误框避免阻塞UI和造成主窗口失焦
         std::thread([]() {
-            MessageBoxW(nullptr, L"请求失败：接口不可达，请检查网络和端口设置。", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+            MessageBoxW(nullptr, L"API请求失败，请检查端口设置和EasyBluetooth是否开启。", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
         }).detach();
         return;
     }
