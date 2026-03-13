@@ -267,16 +267,16 @@ namespace
 
         // Logical (unscrolled) top positions
         const int networkVirtTop = 16;
-        const int networkH       = 100;
-        const int timingVirtTop  = networkVirtTop + networkH + 6; // 122
-        const int timingH        = 60;
-        const int deviceVirtTop  = timingVirtTop + timingH + 6;   // 188
+        const int networkH       = 106;
+        const int timingVirtTop  = networkVirtTop + networkH + 10;
+        const int timingH        = 66;
+        const int deviceVirtTop  = timingVirtTop + timingH + 10;
 
         // Device group height
         int deviceH = 150;
 
         state->totalContentH = deviceVirtTop + deviceH + 16;
-
+        
         // Clamp scroll position - 确保设备移除后滚动位置正确
         int maxScroll = state->totalContentH - contentAreaH;
         if (maxScroll < 0) maxScroll = 0;
@@ -305,47 +305,50 @@ namespace
         int valueW    = groupW - (valueLeft - margin) - 20;
         if (valueW < 80) valueW = 80;
 
+        // Common flags for moving children
+        const UINT moveFlags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
+
         // Network group + controls
-        SetWindowPos(state->hNetworkGroup,      nullptr, margin, networkVirtTop - sp, groupW, networkH, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hPortLabel,         nullptr, labelLeft, networkVirtTop + 26 - sp, 190, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hPortEdit,          nullptr, valueLeft, networkVirtTop + 22 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hTokenLabel,        nullptr, labelLeft, networkVirtTop + 60 - sp, 190, 20,   SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hTokenEdit,         nullptr, valueLeft, networkVirtTop + 56 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hNetworkGroup,      nullptr, margin, networkVirtTop - sp, groupW, networkH, moveFlags);
+        SetWindowPos(state->hPortLabel,         nullptr, labelLeft, networkVirtTop + 30 - sp, 190, 20,   moveFlags);
+        SetWindowPos(state->hPortEdit,          nullptr, valueLeft, networkVirtTop + 28 - sp, valueW, 24, moveFlags);
+        SetWindowPos(state->hTokenLabel,        nullptr, labelLeft, networkVirtTop + 66 - sp, 190, 20,   moveFlags);
+        SetWindowPos(state->hTokenEdit,         nullptr, valueLeft, networkVirtTop + 64 - sp, valueW, 24, moveFlags);
 
         // Timing group + controls
-        SetWindowPos(state->hTimingGroup,        nullptr, margin, timingVirtTop - sp, groupW, timingH, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hRefreshLabel,       nullptr, labelLeft, timingVirtTop + 26 - sp, 260, 20, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hRefreshEdit,        nullptr, valueLeft, timingVirtTop + 22 - sp, valueW, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hTimingGroup,        nullptr, margin, timingVirtTop - sp, groupW, timingH, moveFlags);
+        SetWindowPos(state->hRefreshLabel,       nullptr, labelLeft, timingVirtTop + 30 - sp, 260, 20, moveFlags);
+        SetWindowPos(state->hRefreshEdit,        nullptr, valueLeft, timingVirtTop + 28 - sp, valueW, 24, moveFlags);
 
         // Device group: resize with SWP_FRAMECHANGED so the groupbox border is redrawn correctly
         SetWindowPos(state->hDeviceGroup, nullptr, margin, deviceVirtTop - sp, groupW, deviceH,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            moveFlags | SWP_FRAMECHANGED);
         // Refresh button: top-right inside device group
         if (state->hRefreshButton)
-            SetWindowPos(state->hRefreshButton, nullptr, groupW - 80, 20, 64, 26, SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(state->hRefreshButton, nullptr, groupW - 80, 20, 64, 26, moveFlags);
         // Move up button
         if (state->hMoveUpButton)
-            SetWindowPos(state->hMoveUpButton, nullptr, groupW - 80, 56, 64, 26, SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(state->hMoveUpButton, nullptr, groupW - 80, 56, 64, 26, moveFlags);
         // Move down button
         if (state->hMoveDownButton)
-            SetWindowPos(state->hMoveDownButton, nullptr, groupW - 80, 92, 64, 26, SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(state->hMoveDownButton, nullptr, groupW - 80, 92, 64, 26, moveFlags);
         // Resize List View
         if (state->hDeviceList)
         {
             int listW = groupW - 100;
-            SetWindowPos(state->hDeviceList, nullptr, 16, 20, listW, deviceH - 32, SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(state->hDeviceList, nullptr, 16, 20, listW, deviceH - 32, moveFlags);
             ListView_SetColumnWidth(state->hDeviceList, 0, listW - 25);
         }
 
-        // Fixed button bar
+        // Fixed button bar (not scrolled)
         int right = clientW - margin;
-        SetWindowPos(state->hCancelButton, nullptr, right - 80,                         buttonY, 80, buttonH, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hOkButton,     nullptr, right - 80 * 2 - buttonGap,        buttonY, 80, buttonH, SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(state->hApplyButton,  nullptr, right - 80 * 3 - buttonGap * 2,    buttonY, 80, buttonH, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(state->hCancelButton, nullptr, right - 80,                         buttonY, 80, buttonH, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+        SetWindowPos(state->hOkButton,     nullptr, right - 80 * 2 - buttonGap,        buttonY, 80, buttonH, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+        SetWindowPos(state->hApplyButton,  nullptr, right - 80 * 3 - buttonGap * 2,    buttonY, 80, buttonH, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
 
-        // Full synchronous repaint: erase background, redraw frames and all children
-        RedrawWindow(hWnd, nullptr, nullptr,
-            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+        // Full repaint
+        InvalidateRect(hWnd, nullptr, TRUE);
+        UpdateWindow(hWnd);
     }
 
     bool IsAuthFailedResponse(const std::string& json)
@@ -1038,6 +1041,19 @@ void BatteryPlugin::FetchAndUpdate()
     std::string json = HttpGet(API_HOST, port, API_PATH, token.empty() ? nullptr : token.c_str(), 3000);
     if (json.empty())
     {
+        bool dialogOpening = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            dialogOpening = m_optionsDialogOpening;
+        }
+        
+        if (!dialogOpening) {
+            // 使用独立线程弹出错误框避免阻塞UI和造成主窗口失焦
+            std::thread([]() {
+                MessageBoxW(nullptr, L"请求失败：接口不可达，请检查网络和端口设置。", L"设备电量", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+            }).detach();
+        }
+        
         std::lock_guard<std::mutex> lock(m_mutex);
         for (auto& item : m_items)
             item->SetOffline();
@@ -1089,6 +1105,7 @@ void BatteryPlugin::FetchAndUpdate()
         m_pluginDisabled = false;
         m_stopApiRequests = false; // 重置停止API请求标志
         m_availableDevices = devices;
+        m_refreshDevices = devices; // 同时也同步设置界面的缓存，防止离线设备在任务栏停留
         
         // 成功鉴权，重置提示框标志
         std::wstring dummy;
@@ -1132,13 +1149,6 @@ void BatteryPlugin::DataRequired()
         InitDevices();
     else
     {
-        bool dialogOpening = false;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            dialogOpening = m_optionsDialogOpening;
-        }
-        if (dialogOpening) return; // 对话框打开期间停止后台自动刷新
-
         unsigned long long now = GetTickCount64();
         bool needRefresh = false;
         {
